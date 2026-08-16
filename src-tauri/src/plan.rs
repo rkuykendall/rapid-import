@@ -37,6 +37,11 @@ pub struct PlanItem {
     /// True when this file's content hash already exists in the SQLite
     /// index, e.g. re-scanning the same SD card after a prior import.
     pub already_imported: bool,
+    /// Caller-set exclusion — "don't import this file, for any reason" —
+    /// independent of conflict status. `scan()` always produces `false`;
+    /// only ever set by a caller mutating `Plan.items` between `scan()`
+    /// and `commit_plan()`.
+    pub excluded: bool,
 }
 
 impl PlanItem {

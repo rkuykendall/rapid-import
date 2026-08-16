@@ -85,6 +85,7 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
         conflict: ConflictKind::None,
         no_op: false,
         already_imported,
+        excluded: false,
     }
 }
 

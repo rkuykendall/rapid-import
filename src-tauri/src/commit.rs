@@ -43,6 +43,10 @@ pub struct CommitSummary {
     /// Items skipped due to a genuine naming collision (different content)
     /// under `ConflictPolicy::Skip`.
     pub skipped: usize,
+    /// Items manually excluded by the caller (`PlanItem::excluded`) — left
+    /// untouched at the source regardless of conflict status. Distinct
+    /// from `skipped`, which always implies a real naming collision.
+    pub excluded: usize,
 }
 
 pub struct CommitOptions<'a> {
@@ -210,6 +214,13 @@ fn commit_item(
         summary.already_imported += 1;
         return Ok(());
     }
+    if item.excluded {
+        // Caller's explicit "don't import this one" wins regardless of
+        // conflict status — checked ahead of any conflict detection so it
+        // short-circuits everything below.
+        summary.excluded += 1;
+        return Ok(());
+    }
 
     let filename = item
         .source_path
@@ -332,6 +343,7 @@ mod tests {
             conflict: crate::plan::ConflictKind::None,
             no_op: false,
             already_imported: false,
+            excluded: false,
         }
     }
 
@@ -406,6 +418,45 @@ mod tests {
     }
 
     #[test]
+    fn excluded_primary_still_leaves_sibling_in_its_target_folder() {
+        // The primary (highest-confidence sibling) determines the group's
+        // target folder before any member's commit_item runs, so excluding
+        // the primary itself must not disturb where its sibling lands.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let raw_path = source.path().join("IMG_0001.CR3");
+        let xmp_path = source.path().join("IMG_0001.xmp");
+        fs::write(&raw_path, b"raw bytes").unwrap();
+        fs::write(&xmp_path, b"xmp bytes").unwrap();
+
+        let primary_dest = destination.path().join("2023/2023-08-15/IMG_0001.CR3");
+        let sidecar_own_dest = destination.path().join("2026/2026-08-16/IMG_0001.xmp");
+
+        let mut primary = item(raw_path.clone(), Some(primary_dest.clone()), vec![candidate(2023, 8, 15, 0.95)]);
+        primary.excluded = true;
+        let sibling = item(xmp_path.clone(), Some(sidecar_own_dest), vec![candidate(2026, 8, 16, 0.2)]);
+
+        let plan = Plan {
+            items: vec![primary, sibling],
+        };
+
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+
+        assert_eq!(summary.excluded, 1);
+        assert_eq!(summary.moved, 1);
+        assert!(raw_path.exists(), "excluded primary stays at the source");
+        assert!(!primary_dest.exists());
+        let sidecar_final = destination.path().join("2023/2023-08-15/IMG_0001.xmp");
+        assert!(
+            sidecar_final.exists(),
+            "sidecar should still land in the primary's computed folder, not its own"
+        );
+    }
+
+    #[test]
     fn no_op_items_are_not_moved_or_counted_as_moves() {
         let library = tempfile::tempdir().unwrap();
         let undo_dir = tempfile::tempdir().unwrap();
@@ -447,6 +498,59 @@ mod tests {
         assert_eq!(summary.already_imported, 1);
         assert!(src_path.exists());
         assert!(!dest_path.exists());
+    }
+
+    #[test]
+    fn excluded_item_is_left_at_the_source() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"fixture").unwrap();
+        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+
+        let mut excluded_item = item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)]);
+        excluded_item.excluded = true;
+
+        let plan = Plan { items: vec![excluded_item] };
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+
+        assert_eq!(summary.excluded, 1);
+        assert_eq!(summary.moved, 0);
+        assert_eq!(summary.skipped, 0);
+        assert!(src_path.exists());
+        assert!(!dest_path.exists());
+    }
+
+    #[test]
+    fn excluded_item_with_a_conflict_is_still_just_excluded() {
+        // Exclusion short-circuits before conflict detection even runs —
+        // it should never fall into the `skipped` (conflict-driven) bucket.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"new bytes").unwrap();
+        let dest_folder = destination.path().join("2023/2023-08-15");
+        fs::create_dir_all(&dest_folder).unwrap();
+        let dest_path = dest_folder.join("IMG_20230815_141523.jpg");
+        fs::write(&dest_path, b"already there").unwrap();
+
+        let mut excluded_item = item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)]);
+        excluded_item.excluded = true;
+
+        let plan = Plan { items: vec![excluded_item] };
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+
+        assert_eq!(summary.excluded, 1);
+        assert_eq!(summary.skipped, 0);
+        assert_eq!(summary.moved, 0);
+        assert!(src_path.exists());
+        assert_eq!(fs::read_to_string(&dest_path).unwrap(), "already there");
     }
 
     #[test]

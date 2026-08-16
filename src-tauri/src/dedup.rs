@@ -255,6 +255,7 @@ mod tests {
             conflict: crate::plan::ConflictKind::None,
             no_op: false,
             already_imported: false,
+            excluded: false,
         }
     }
 
