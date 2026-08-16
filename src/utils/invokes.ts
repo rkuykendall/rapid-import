@@ -4,4 +4,6 @@
 export enum Invokes {
   ScanSource = 'scan_source',
   PreviewFolderTemplate = 'preview_folder_template',
+  LoadDefaultProfile = 'load_default_profile',
+  SaveDefaultProfile = 'save_default_profile',
 }

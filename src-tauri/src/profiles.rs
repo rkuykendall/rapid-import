@@ -46,7 +46,7 @@ impl ConflictPolicy {
 /// I'll pick whatever card is mounted each time"), or neither yet. When
 /// present, a caller (future UI) can pre-fill folder pickers with these —
 /// the paths that "will probably be saved between sessions."
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Profile {
     pub id: i64,
     pub name: String,

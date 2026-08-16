@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-shell';
 import { ExternalLink, Loader2, Search } from 'lucide-react';
 import TitleBar from './window/TitleBar';
@@ -9,6 +9,7 @@ import FolderPicker from './components/FolderPicker';
 import PlanItemRow from './components/PlanItemRow';
 import { useScan } from './hooks/useScan';
 import { useFolderTemplatePreview } from './hooks/useFolderTemplatePreview';
+import { useDefaultProfile } from './hooks/useDefaultProfile';
 import { DEFAULT_THEME_ID, THEMES } from './utils/themes';
 import { TextVariants } from './types/typography';
 
@@ -31,9 +32,8 @@ function useAppliedTheme() {
 export default function App() {
   useAppliedTheme();
 
-  const [sourceRoot, setSourceRoot] = useState('');
-  const [destinationRoot, setDestinationRoot] = useState('');
-  const [folderTemplate, setFolderTemplate] = useState(DEFAULT_FOLDER_TEMPLATE);
+  const { sourceRoot, setSourceRoot, destinationRoot, setDestinationRoot, folderTemplate, setFolderTemplate } =
+    useDefaultProfile(DEFAULT_FOLDER_TEMPLATE);
   const { plan, loading, error, scan } = useScan();
   const templatePreview = useFolderTemplatePreview(folderTemplate);
 
