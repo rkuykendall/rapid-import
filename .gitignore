@@ -1,4 +1,5 @@
 *.md
+!README.md
 /target
 /node_modules
 /dist
