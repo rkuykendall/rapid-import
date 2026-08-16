@@ -9,7 +9,7 @@ use rapid_import_core::dedup::{self, DuplicateKind};
 use rapid_import_core::plan::ConflictKind;
 use rapid_import_core::scan::{scan, ScanOptions};
 
-const DEFAULT_FOLDER_TEMPLATE: &str = "{yyyy}/{yyyy}-{mm}-{dd}";
+const DEFAULT_FOLDER_TEMPLATE: &str = "%Y/%Y-%m-%d";
 
 /// Minimal dry-run harness for the scan/plan engine, per execution-plan.md
 /// §9 phase 2 ("exposed via a CLI or minimal test harness before the UI

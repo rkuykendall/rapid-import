@@ -157,7 +157,7 @@ mod tests {
     fn sample() -> NewProfile {
         NewProfile {
             name: "SD Card".to_string(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}".to_string(),
+            folder_template: "%Y/%Y-%m-%d".to_string(),
             source_root: Some("/Volumes/SDCARD/DCIM".to_string()),
             destination_root: Some("/Users/me/Photos".to_string()),
             date_fallback_order: vec![
@@ -177,7 +177,7 @@ mod tests {
 
         let loaded = load_profile(&conn, id).unwrap().unwrap();
         assert_eq!(loaded.name, "SD Card");
-        assert_eq!(loaded.folder_template, "{yyyy}/{yyyy}-{mm}-{dd}");
+        assert_eq!(loaded.folder_template, "%Y/%Y-%m-%d");
         assert_eq!(loaded.source_root.as_deref(), Some("/Volumes/SDCARD/DCIM"));
         assert_eq!(loaded.destination_root.as_deref(), Some("/Users/me/Photos"));
         assert_eq!(loaded.date_fallback_order, vec!["exif", "filename", "xmp", "mtime"]);

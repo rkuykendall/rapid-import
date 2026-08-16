@@ -3,4 +3,5 @@
 // call sites get autocomplete instead of stringly-typed invoke() calls.
 export enum Invokes {
   ScanSource = 'scan_source',
+  PreviewFolderTemplate = 'preview_folder_template',
 }

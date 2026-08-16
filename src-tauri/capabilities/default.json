@@ -12,6 +12,7 @@
     "core:window:allow-close",
     "core:window:allow-toggle-maximize",
     "core:window:allow-set-fullscreen",
-    "os:allow-os-type"
+    "os:allow-os-type",
+    "shell:allow-open"
   ]
 }

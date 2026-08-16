@@ -223,7 +223,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: None,
         };
@@ -255,7 +255,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: None,
         };
@@ -280,7 +280,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: None,
         };
@@ -313,7 +313,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: None,
         };
@@ -337,7 +337,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: None,
         };
@@ -367,7 +367,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: None,
         };
@@ -399,7 +399,7 @@ mod tests {
         let options = ScanOptions {
             source_root: library.path(),
             destination_root: library.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: None,
         };
@@ -424,7 +424,7 @@ mod tests {
         let options = ScanOptions {
             source_root: library.path(),
             destination_root: library.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: None,
         };
@@ -454,7 +454,7 @@ mod tests {
         let options = ScanOptions {
             source_root: library.path(),
             destination_root: library.path(),
-            folder_template: "{yyyy}/{mm} {month_name}",
+            folder_template: "%Y/%m %B",
             now: today(),
             index: None,
         };
@@ -485,7 +485,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{mm} {month_name}",
+            folder_template: "%Y/%m %B",
             now: today(),
             index: None,
         };
@@ -513,7 +513,7 @@ mod tests {
         let options = ScanOptions {
             source_root: library.path(),
             destination_root: library.path(),
-            folder_template: "{yyyy}/{mm} {month_name}",
+            folder_template: "%Y/%m %B",
             now: today(),
             index: None,
         };
@@ -566,7 +566,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: Some(&conn),
         };
@@ -586,7 +586,7 @@ mod tests {
         let options = ScanOptions {
             source_root: source.path(),
             destination_root: destination.path(),
-            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            folder_template: "%Y/%Y-%m-%d",
             now: today(),
             index: Some(&conn),
         };

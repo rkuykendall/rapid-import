@@ -83,16 +83,18 @@ pub struct Plan {
     pub items: Vec<PlanItem>,
 }
 
-/// Renders folder/filename templates against a resolved date. Recognized
-/// tokens: `{yyyy}`, `{mm}`, `{dd}`, `{month_name}` — each just delegates to
-/// chrono's own strftime directives, same idiom RapidRAW uses for its
-/// `{YYYY}`/`{MM}`/`{DD}` export-filename tokens in `file_management.rs`.
+/// Renders a folder template against a resolved date using chrono's own
+/// strftime syntax directly (`%Y`, `%m`, `%d`, `%B`, ...) — see
+/// <https://docs.rs/chrono/latest/chrono/format/strftime/> for the full
+/// specifier reference. Deliberately not a custom token vocabulary: an
+/// earlier version hand-rolled `{yyyy}`/`{mm}`/`{dd}`/`{mmmm}`-style tokens,
+/// which meant maintaining our own (incomplete, undocumented) subset of
+/// what chrono already provides — and a specifier we hadn't implemented
+/// would silently show up as literal text in the folder name instead of
+/// erroring. Delegating to chrono directly gets the full spec for free and
+/// gives users a real, authoritative doc page to check against.
 pub fn render_template(template: &str, date: NaiveDateTime) -> String {
-    template
-        .replace("{yyyy}", &date.format("%Y").to_string())
-        .replace("{mm}", &date.format("%m").to_string())
-        .replace("{dd}", &date.format("%d").to_string())
-        .replace("{month_name}", &date.format("%B").to_string())
+    date.format(template).to_string()
 }
 
 #[cfg(test)]
@@ -106,13 +108,13 @@ mod tests {
 
     #[test]
     fn renders_yyyy_mm_dd_folder_template() {
-        let rendered = render_template("{yyyy}/{yyyy}-{mm}-{dd}", dt(2023, 8, 15));
+        let rendered = render_template("%Y/%Y-%m-%d", dt(2023, 8, 15));
         assert_eq!(rendered, "2023/2023-08-15");
     }
 
     #[test]
     fn renders_month_name_template() {
-        let rendered = render_template("{yyyy}/{mm} - {month_name}", dt(2023, 8, 15));
+        let rendered = render_template("%Y/%m - %B", dt(2023, 8, 15));
         assert_eq!(rendered, "2023/08 - August");
     }
 
