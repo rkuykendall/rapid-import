@@ -1,0 +1,23 @@
+[package]
+name = "rapid-import"
+description = "Photo/video auto-sort and import tool with multi-source date resolution."
+edition = "2024"
+rust-version = "1.92"
+
+[lib]
+name = "rapid_import_core"
+path = "src/lib.rs"
+
+[dependencies]
+chrono = "0.4"
+regex = "1.12"
+
+[profile.dev]
+opt-level = 1
+debug = true
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
