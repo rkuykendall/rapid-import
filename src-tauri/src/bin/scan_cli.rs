@@ -72,6 +72,7 @@ fn main() -> ExitCode {
         match item.conflict {
             ConflictKind::None => {}
             ConflictKind::DestinationExists => flags.push("CONFLICT: destination exists".to_string()),
+            ConflictKind::DuplicateAtDestination => flags.push("DUPLICATE: identical file already at destination".to_string()),
             ConflictKind::DuplicateInPlan => flags.push("CONFLICT: duplicate in plan".to_string()),
         }
         let flags_str = if flags.is_empty() {
@@ -105,10 +106,20 @@ fn main() -> ExitCode {
     let total = items.len();
     let already_organized = items.iter().filter(|i| i.no_op).count();
     let already_imported = items.iter().filter(|i| i.already_imported).count();
+    let duplicate_at_destination = items
+        .iter()
+        .filter(|i| i.conflict == ConflictKind::DuplicateAtDestination)
+        .count();
     let needs_review = items.iter().filter(|i| i.needs_review).count();
-    let conflicts = items.iter().filter(|i| i.conflict != ConflictKind::None).count();
+    // DuplicateAtDestination is excluded here — it's a harmless duplicate,
+    // not something requiring Skip/Rename resolution.
+    let conflicts = items
+        .iter()
+        .filter(|i| matches!(i.conflict, ConflictKind::DestinationExists | ConflictKind::DuplicateInPlan))
+        .count();
     println!(
         "{total} file(s) scanned, {already_organized} already organized, {already_imported} already imported, \
+         {duplicate_at_destination} duplicate at destination, \
          {needs_review} needing review, {conflicts} conflict(s). Dry run only — nothing written."
     );
 

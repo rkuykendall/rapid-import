@@ -139,7 +139,11 @@ fn flag_conflicts(items: &mut [PlanItem]) {
         if destination_counts.get(dest).copied().unwrap_or(0) > 1 {
             item.conflict = ConflictKind::DuplicateInPlan;
         } else if dest.exists() {
-            item.conflict = ConflictKind::DestinationExists;
+            item.conflict = if has_identical_content(&item.source_path, dest) {
+                ConflictKind::DuplicateAtDestination
+            } else {
+                ConflictKind::DestinationExists
+            };
         }
     }
 }
@@ -150,6 +154,17 @@ fn flag_conflicts(items: &mut [PlanItem]) {
 /// conflict with itself.
 fn is_same_file(source: &Path, destination: &Path) -> bool {
     match (fs::canonicalize(source), fs::canonicalize(destination)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Distinguishes a real naming collision from a harmless duplicate — see
+/// `ConflictKind`. There is no `Overwrite` option anywhere in this app
+/// precisely so this check can't be skipped: identical content is always
+/// safe to leave alone, different content is never safe to destroy.
+fn has_identical_content(source: &Path, destination: &Path) -> bool {
+    match (dedup::content_hash(source), dedup::content_hash(destination)) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
@@ -226,6 +241,34 @@ mod tests {
         let plan = scan(&options);
 
         assert_eq!(find(&plan, "IMG_20230815_141523.jpg").conflict, ConflictKind::DestinationExists);
+    }
+
+    #[test]
+    fn flags_identical_content_at_destination_as_duplicate_not_a_conflict() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        fs::write(source.path().join("IMG_20230815_141523.jpg"), b"exact same bytes").unwrap();
+        fs::create_dir_all(destination.path().join("2023/2023-08-15")).unwrap();
+        fs::write(
+            destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg"),
+            b"exact same bytes",
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        assert_eq!(
+            find(&plan, "IMG_20230815_141523.jpg").conflict,
+            ConflictKind::DuplicateAtDestination
+        );
     }
 
     #[test]

@@ -1,12 +1,18 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+/// What to do when a *different* file already occupies the computed
+/// destination path — a real naming collision, not a duplicate. There is
+/// deliberately no `Overwrite` variant: if the existing file has identical
+/// content, `commit.rs` recognizes that on its own and skips without ever
+/// consulting this policy (nothing would be lost); if the content differs,
+/// overwriting would silently destroy data that has nothing to do with the
+/// incoming file, so it's never offered as an option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConflictPolicy {
     Skip,
     Rename,
-    Overwrite,
 }
 
 impl ConflictPolicy {
@@ -14,7 +20,6 @@ impl ConflictPolicy {
         match self {
             ConflictPolicy::Skip => "skip",
             ConflictPolicy::Rename => "rename",
-            ConflictPolicy::Overwrite => "overwrite",
         }
     }
 
@@ -22,7 +27,6 @@ impl ConflictPolicy {
         match s {
             "skip" => Ok(ConflictPolicy::Skip),
             "rename" => Ok(ConflictPolicy::Rename),
-            "overwrite" => Ok(ConflictPolicy::Overwrite),
             other => Err(rusqlite::Error::InvalidColumnType(
                 0,
                 format!("unknown conflict_policy '{other}'"),

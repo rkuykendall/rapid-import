@@ -12,8 +12,13 @@ pub const NEEDS_REVIEW_THRESHOLD: f32 = 0.7;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictKind {
     None,
-    /// A file already exists at the computed destination path.
+    /// A *different* file already exists at the computed destination path —
+    /// a real naming collision. Never resolved by overwriting; only
+    /// `Skip`/`Rename` apply.
     DestinationExists,
+    /// The file already at the computed destination path has identical
+    /// content — nothing to import, safe to skip without asking.
+    DuplicateAtDestination,
     /// Another item in this same plan resolved to the same destination.
     DuplicateInPlan,
 }

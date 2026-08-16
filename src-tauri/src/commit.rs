@@ -35,7 +35,13 @@ pub struct CommitSummary {
     /// Items whose content hash already exists in the index (e.g.
     /// re-importing from the same SD card) — left untouched at the source.
     pub already_imported: usize,
-    /// Items skipped due to an unresolved conflict under `ConflictPolicy::Skip`.
+    /// The destination path was already occupied, but by a byte-identical
+    /// file — not caught by the index (e.g. it was never imported through
+    /// this tool). Left untouched at the source; nothing would be gained by
+    /// moving a duplicate.
+    pub duplicate_at_destination: usize,
+    /// Items skipped due to a genuine naming collision (different content)
+    /// under `ConflictPolicy::Skip`.
     pub skipped: usize,
 }
 
@@ -211,14 +217,28 @@ fn commit_item(
         .context("source path has no filename")?;
     let mut destination = target_folder.join(filename);
 
+    // Computed once, before any move, and reused below for the index row —
+    // the file's bytes don't change across a rename/copy, so this stays
+    // valid post-move and avoids hashing the file twice.
+    let source_hash = dedup::content_hash(&item.source_path).ok();
+
     if destination.exists() {
+        let identical =
+            source_hash.is_some() && source_hash.as_deref() == dedup::content_hash(&destination).ok().as_deref();
+        if identical {
+            // Same bytes already sit at this path — not a conflict, just a
+            // duplicate. There's no `Overwrite` policy to fall back on
+            // here: identical content is always safe to leave alone,
+            // different content (below) is never safe to destroy.
+            summary.duplicate_at_destination += 1;
+            return Ok(());
+        }
         match options.conflict_policy {
             ConflictPolicy::Skip => {
                 summary.skipped += 1;
                 return Ok(());
             }
             ConflictPolicy::Rename => destination = disambiguate(&destination),
-            ConflictPolicy::Overwrite => {}
         }
     }
 
@@ -229,7 +249,7 @@ fn commit_item(
     db::insert_file(
         options.conn,
         &db::NewFileRecord {
-            content_hash: dedup::content_hash(&destination).unwrap_or_default(),
+            content_hash: source_hash.unwrap_or_default(),
             perceptual_hash: dedup::perceptual_hash(&destination),
             current_path: destination.to_string_lossy().to_string(),
             capture_date: chosen.map(|c| c.date.format("%Y-%m-%dT%H:%M:%S").to_string()),
@@ -427,6 +447,37 @@ mod tests {
         assert_eq!(summary.already_imported, 1);
         assert!(src_path.exists());
         assert!(!dest_path.exists());
+    }
+
+    #[test]
+    fn identical_content_at_destination_is_left_alone_regardless_of_policy() {
+        // Not caught by `already_imported` (that's an index lookup) — this
+        // is the filesystem-only safety net: a byte-identical file already
+        // sits at the computed destination (e.g. it was placed there by
+        // hand, never indexed). No `Overwrite` policy exists to reach for;
+        // this is resolved before any policy is consulted at all.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"identical bytes").unwrap();
+        let dest_folder = destination.path().join("2023/2023-08-15");
+        fs::create_dir_all(&dest_folder).unwrap();
+        let dest_path = dest_folder.join("IMG_20230815_141523.jpg");
+        fs::write(&dest_path, b"identical bytes").unwrap();
+
+        let plan = Plan {
+            items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
+        };
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+
+        assert_eq!(summary.duplicate_at_destination, 1);
+        assert_eq!(summary.moved, 0);
+        assert_eq!(summary.skipped, 0);
+        assert!(src_path.exists(), "source is left in place, not deleted");
+        assert_eq!(fs::read_to_string(&dest_path).unwrap(), "identical bytes");
     }
 
     #[test]
