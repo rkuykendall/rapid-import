@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/plugin-shell';
 import { ExternalLink, Loader2, Search } from 'lucide-react';
 import TitleBar from './window/TitleBar';
@@ -9,7 +9,7 @@ import FolderPicker from './components/FolderPicker';
 import PlanItemRow from './components/PlanItemRow';
 import { useScan } from './hooks/useScan';
 import { useFolderTemplatePreview } from './hooks/useFolderTemplatePreview';
-import { useDefaultProfile } from './hooks/useDefaultProfile';
+import { useDestinationProfile } from './hooks/useDestinationProfile';
 import { DEFAULT_THEME_ID, THEMES } from './utils/themes';
 import { TextVariants } from './types/typography';
 
@@ -32,12 +32,29 @@ function useAppliedTheme() {
 export default function App() {
   useAppliedTheme();
 
-  const { sourceRoot, setSourceRoot, destinationRoot, setDestinationRoot, folderTemplate, setFolderTemplate } =
-    useDefaultProfile(DEFAULT_FOLDER_TEMPLATE);
-  const { plan, loading, error, scan } = useScan();
+  // Destination is picked first, RapidRAW-style — everything else (source,
+  // template) is recalled per-destination once it's set, via
+  // useDestinationProfile.
+  const [destinationRoot, setDestinationRoot] = useState('');
+  const [reorganizeInPlace, setReorganizeInPlace] = useState(false);
+  const { sourceRoot, setSourceRoot, folderTemplate, setFolderTemplate, save } = useDestinationProfile(
+    destinationRoot,
+    DEFAULT_FOLDER_TEMPLATE,
+  );
+  const { plan, loading, error, scannedCount, scan } = useScan();
   const templatePreview = useFolderTemplatePreview(folderTemplate);
 
-  const canScan = sourceRoot.trim() !== '' && destinationRoot.trim() !== '' && folderTemplate.trim() !== '';
+  const hasDestination = destinationRoot.trim() !== '';
+  // "Same as destination" means reorganizing an existing library in place —
+  // the source and destination roots are the same tree; see scan.rs's
+  // no-op/legal-subfolder handling for what that actually does on disk.
+  const effectiveSourceRoot = reorganizeInPlace ? destinationRoot : sourceRoot;
+  const canScan = hasDestination && effectiveSourceRoot.trim() !== '' && folderTemplate.trim() !== '';
+
+  const handleScan = () => {
+    save(effectiveSourceRoot);
+    scan(effectiveSourceRoot, destinationRoot, folderTemplate);
+  };
 
   return (
     <div className="h-screen w-screen flex flex-col bg-bg-primary">
@@ -47,34 +64,56 @@ export default function App() {
           <Text variant={TextVariants.headline}>RapidImport</Text>
 
           <div className="bg-surface rounded-lg p-4 flex flex-col gap-4">
-            <FolderPicker label="Source folder" value={sourceRoot} onChange={setSourceRoot} />
             <FolderPicker label="Destination folder" value={destinationRoot} onChange={setDestinationRoot} />
-            <div className="flex flex-col gap-1">
-              <Text variant={TextVariants.label}>Folder template</Text>
-              <Input value={folderTemplate} onChange={(e) => setFolderTemplate(e.target.value)} />
-              <div className="flex items-center justify-between gap-2">
-                <Text variant={TextVariants.small}>
-                  Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
-                </Text>
-                <button
-                  type="button"
-                  onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
-                  aria-label="Open chrono strftime format reference in browser"
-                  className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors shrink-0"
-                >
-                  chrono format reference
-                  <ExternalLink size={12} />
-                </button>
-              </div>
-            </div>
-            <Button
-              onClick={() => scan(sourceRoot, destinationRoot, folderTemplate)}
-              disabled={!canScan || loading}
-              className="self-start"
-            >
-              {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-              {loading ? 'Scanning… this can take a moment for large folders' : 'Scan (dry run)'}
-            </Button>
+
+            {!hasDestination && (
+              <Text variant={TextVariants.body}>Pick a destination folder to continue.</Text>
+            )}
+
+            {hasDestination && (
+              <>
+                <div className="flex flex-col gap-1">
+                  <FolderPicker
+                    label="Source folder"
+                    value={effectiveSourceRoot}
+                    onChange={setSourceRoot}
+                    disabled={reorganizeInPlace}
+                  />
+                  <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer w-fit">
+                    <input
+                      type="checkbox"
+                      checked={reorganizeInPlace}
+                      onChange={(e) => setReorganizeInPlace(e.target.checked)}
+                    />
+                    Same as destination (reorganize)
+                  </label>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Text variant={TextVariants.label}>Folder template</Text>
+                  <Input value={folderTemplate} onChange={(e) => setFolderTemplate(e.target.value)} />
+                  <div className="flex items-center justify-between gap-2">
+                    <Text variant={TextVariants.small}>
+                      Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
+                    </Text>
+                    <button
+                      type="button"
+                      onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
+                      aria-label="Open chrono strftime format reference in browser"
+                      className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors shrink-0"
+                    >
+                      chrono format reference
+                      <ExternalLink size={12} />
+                    </button>
+                  </div>
+                </div>
+                <Button onClick={handleScan} disabled={!canScan || loading} className="self-start">
+                  {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                  {loading
+                    ? `Scanning… ${scannedCount} file${scannedCount === 1 ? '' : 's'} so far`
+                    : 'Scan (dry run)'}
+                </Button>
+              </>
+            )}
           </div>
 
           {error && (

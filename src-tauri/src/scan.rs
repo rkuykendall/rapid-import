@@ -30,12 +30,23 @@ pub struct ScanOptions<'a> {
 /// computes a dry-run plan. No files are read except for metadata/bytes
 /// needed to resolve a date; nothing on disk is written.
 pub fn scan(options: &ScanOptions) -> Plan {
-    let mut items: Vec<PlanItem> = WalkDir::new(options.source_root)
+    scan_with_progress(options, |_| {})
+}
+
+/// Same as `scan`, but calls `on_item` with the running count after each
+/// file is processed — a UI can throttle these into a live "N files
+/// scanned so far" display. `scan` itself is just this with a no-op
+/// callback, so `scan_cli`/existing tests are unaffected.
+pub fn scan_with_progress(options: &ScanOptions, mut on_item: impl FnMut(usize)) -> Plan {
+    let mut items: Vec<PlanItem> = Vec::new();
+    for entry in WalkDir::new(options.source_root)
         .into_iter()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
-        .map(|entry| build_plan_item(entry.path(), options))
-        .collect();
+    {
+        items.push(build_plan_item(entry.path(), options));
+        on_item(items.len());
+    }
 
     flag_conflicts(&mut items);
 
@@ -205,6 +216,30 @@ mod tests {
             .iter()
             .find(|item| item.source_path.file_name().unwrap().to_str().unwrap() == filename)
             .unwrap()
+    }
+
+    #[test]
+    fn scan_with_progress_reports_the_running_count_and_matches_scan() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        fs::write(source.path().join("IMG_20230815_141523.jpg"), b"fixture").unwrap();
+        fs::write(source.path().join("DSC00001.jpg"), b"fixture").unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+
+        let mut counts = Vec::new();
+        let plan = scan_with_progress(&options, |count| counts.push(count));
+
+        assert_eq!(plan.items.len(), 2);
+        counts.sort_unstable();
+        assert_eq!(counts, vec![1, 2]);
     }
 
     #[test]

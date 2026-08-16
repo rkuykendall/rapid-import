@@ -4,13 +4,17 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rapid_import_core::{db, plan, plan::Plan, profiles, scan};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
-/// The single auto-persisted profile backing "remember what I typed" —
-/// the same `profiles` table a future named-profile-switcher UI would use,
-/// just with one implicit row for now. `date_fallback_order`/
-/// `conflict_policy` aren't exposed in the UI yet, so sensible defaults
-/// are hardcoded here rather than left for the user to configure.
+/// Emit a `scan-progress` event at most this often, to avoid flooding the
+/// frontend with an IPC message per file on a large library.
+const SCAN_PROGRESS_EVERY: usize = 10;
+
+/// Profiles are keyed by destination path — pick a destination (library),
+/// recall the source/template last used for *that* destination. `name` and
+/// `date_fallback_order`/`conflict_policy` aren't exposed in the UI yet, so
+/// sensible defaults are hardcoded here rather than left for the user to
+/// configure.
 const DEFAULT_PROFILE_NAME: &str = "Default";
 const DEFAULT_DATE_FALLBACK_ORDER: [&str; 4] = ["exif", "filename", "xmp", "mtime"];
 
@@ -23,6 +27,11 @@ struct AppState {
 /// the whole UI (window becomes unresponsive, OS shows the spinning
 /// pinwheel on macOS) for the entire scan. Every command that does real
 /// I/O should follow this same pattern.
+///
+/// Emits `scan-progress` (payload: running file count) every
+/// `SCAN_PROGRESS_EVERY` files so the UI can show a live count — there's
+/// no separate `scan-complete` event; the resolved `Plan` this command
+/// returns *is* the completion signal.
 #[tauri::command]
 async fn scan_source(
     app_handle: tauri::AppHandle,
@@ -30,6 +39,7 @@ async fn scan_source(
     destination_root: String,
     folder_template: String,
 ) -> Result<Plan, String> {
+    let progress_handle = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -40,7 +50,11 @@ async fn scan_source(
             now: chrono::Local::now().date_naive(),
             index: Some(&conn),
         };
-        Ok(scan::scan(&options))
+        Ok(scan::scan_with_progress(&options, |count| {
+            if count % SCAN_PROGRESS_EVERY == 0 {
+                let _ = progress_handle.emit("scan-progress", count);
+            }
+        }))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -55,24 +69,27 @@ async fn preview_folder_template(folder_template: String) -> String {
     plan::render_template(&folder_template, chrono::Local::now().naive_local())
 }
 
-/// Whichever profile was created first stands in for "the" profile until
-/// a real profile-switcher exists. `None` on a fresh install (nothing
-/// saved yet).
+/// Looks up prior settings for a destination the user just picked —
+/// `None` means this destination has never been used before.
 #[tauri::command]
-async fn load_default_profile(app_handle: tauri::AppHandle) -> Result<Option<profiles::Profile>, String> {
+async fn load_profile_for_destination(
+    app_handle: tauri::AppHandle,
+    destination_root: String,
+) -> Result<Option<profiles::Profile>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        let mut all = profiles::load_profiles(&conn).map_err(|e| e.to_string())?;
-        Ok(if all.is_empty() { None } else { Some(all.remove(0)) })
+        profiles::find_profile_by_destination_root(&conn, &destination_root).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-/// Creates the default profile on first use, updates it thereafter.
+/// Creates a profile for this destination on first use, updates it
+/// thereafter. Called once, when the user actually commits to a scan —
+/// not on every keystroke while they're still typing.
 #[tauri::command]
-async fn save_default_profile(
+async fn save_profile_for_destination(
     app_handle: tauri::AppHandle,
     source_root: String,
     destination_root: String,
@@ -81,7 +98,7 @@ async fn save_default_profile(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        let existing = profiles::load_profiles(&conn).map_err(|e| e.to_string())?;
+        let existing = profiles::find_profile_by_destination_root(&conn, &destination_root).map_err(|e| e.to_string())?;
         let new_profile = profiles::NewProfile {
             name: DEFAULT_PROFILE_NAME.to_string(),
             folder_template,
@@ -90,7 +107,7 @@ async fn save_default_profile(
             date_fallback_order: DEFAULT_DATE_FALLBACK_ORDER.iter().map(|s| s.to_string()).collect(),
             conflict_policy: profiles::ConflictPolicy::Skip,
         };
-        match existing.first() {
+        match existing {
             Some(profile) => profiles::update_profile(&conn, profile.id, &new_profile),
             None => profiles::save_profile(&conn, &new_profile).map(|_| ()),
         }
@@ -115,8 +132,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             scan_source,
             preview_folder_template,
-            load_default_profile,
-            save_default_profile
+            load_profile_for_destination,
+            save_profile_for_destination
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

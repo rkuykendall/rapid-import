@@ -127,6 +127,21 @@ pub fn load_profile(conn: &Connection, id: i64) -> rusqlite::Result<Option<Profi
     .optional()
 }
 
+/// Looks up a profile by its exact destination path — the "pick a
+/// destination, recall what I did last time for this library" lookup.
+/// Exact string match only; a trailing-slash or casing difference misses
+/// (falls through to "no history for this destination" rather than
+/// erroring), which is an acceptable v1 gap rather than a correctness bug.
+pub fn find_profile_by_destination_root(conn: &Connection, destination_root: &str) -> rusqlite::Result<Option<Profile>> {
+    conn.query_row(
+        "SELECT id, name, folder_template, source_root, destination_root, date_fallback_order, conflict_policy
+         FROM profiles WHERE destination_root = ?1 LIMIT 1",
+        params![destination_root],
+        row_to_profile,
+    )
+    .optional()
+}
+
 pub fn delete_profile(conn: &Connection, id: i64) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM profiles WHERE id = ?1", params![id])?;
     Ok(())
@@ -211,6 +226,24 @@ mod tests {
         // Untouched fields survive the full replace unchanged.
         assert_eq!(loaded.source_root.as_deref(), Some("/Volumes/SDCARD/DCIM"));
         assert_eq!(loaded.name, "SD Card");
+    }
+
+    #[test]
+    fn find_profile_by_destination_root_finds_a_match() {
+        let conn = db::open_in_memory().unwrap();
+        save_profile(&conn, &sample()).unwrap();
+
+        let found = find_profile_by_destination_root(&conn, "/Users/me/Photos").unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().source_root.as_deref(), Some("/Volumes/SDCARD/DCIM"));
+    }
+
+    #[test]
+    fn find_profile_by_destination_root_is_none_for_an_unseen_destination() {
+        let conn = db::open_in_memory().unwrap();
+        save_profile(&conn, &sample()).unwrap();
+
+        assert!(find_profile_by_destination_root(&conn, "/Users/me/SomewhereElse").unwrap().is_none());
     }
 
     #[test]
