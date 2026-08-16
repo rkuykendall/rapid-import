@@ -66,7 +66,10 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
 
     let destination_path = chosen.as_ref().map(|candidate| {
         let rendered_folder = render_template(options.folder_template, candidate.date);
-        options.destination_root.join(rendered_folder).join(filename)
+        let destination_folder =
+            preserve_existing_subfolder(source_path, options.source_root, &rendered_folder)
+                .unwrap_or_else(|| PathBuf::from(&rendered_folder));
+        options.destination_root.join(destination_folder).join(filename)
     });
 
     let already_imported = options
@@ -112,6 +115,23 @@ fn file_time(
     let system_time = extract(&metadata).ok()?;
     let datetime: DateTime<Local> = system_time.into();
     Some(datetime.naive_local())
+}
+
+/// If `source_path` already lives at or below the rendered date folder
+/// (relative to `source_root`), returns that fuller relative path so any
+/// extra subfolders the user added on top of the date structure — an event
+/// or trip name, say `2018/02 February/Wedding/` — are preserved rather
+/// than flattened away. Returns `None` when the file isn't already nested
+/// under a matching date folder at all, so a fresh import still lands at
+/// the plain templated folder.
+fn preserve_existing_subfolder(source_path: &Path, source_root: &Path, rendered_folder: &str) -> Option<PathBuf> {
+    let relative_parent = source_path.strip_prefix(source_root).ok()?.parent()?;
+    let rendered_components: Vec<_> = Path::new(rendered_folder).components().collect();
+    let relative_components: Vec<_> = relative_parent.components().collect();
+
+    relative_components
+        .starts_with(rendered_components.as_slice())
+        .then(|| relative_parent.to_path_buf())
 }
 
 /// Flags no-ops (source already sits at its computed destination — the
@@ -415,6 +435,93 @@ mod tests {
         assert_eq!(
             item.destination_path.as_ref().unwrap(),
             &library.path().join("2023/2023-08-15/IMG_20230815_141523.jpg")
+        );
+    }
+
+    #[test]
+    fn reorganize_in_place_preserves_a_legal_subfolder_under_the_date_folder() {
+        // "Wedding" is a subfolder the user added on top of the correct
+        // date structure — it should stay put, not get flattened away.
+        let library = tempfile::tempdir().unwrap();
+        fs::create_dir_all(library.path().join("2018/02 February/Wedding")).unwrap();
+        fs::write(
+            library.path().join("2018/02 February/Wedding/IMG_20180215_090000.jpg"),
+            b"fixture",
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "{yyyy}/{mm} {month_name}",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let item = find(&plan, "IMG_20180215_090000.jpg");
+        assert!(item.no_op, "already in the right place, subfolder and all — nothing to do");
+        assert_eq!(item.conflict, ConflictKind::None);
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &library.path().join("2018/02 February/Wedding/IMG_20180215_090000.jpg")
+        );
+    }
+
+    #[test]
+    fn import_preserves_a_legal_subfolder_into_a_different_destination_root() {
+        // Same idea, but importing from one root into a different one — the
+        // subfolder should still carry over rather than being flattened.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::create_dir_all(source.path().join("2018/02 February/Wedding")).unwrap();
+        fs::write(
+            source.path().join("2018/02 February/Wedding/IMG_20180215_090000.jpg"),
+            b"fixture",
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "{yyyy}/{mm} {month_name}",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let item = find(&plan, "IMG_20180215_090000.jpg");
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &destination.path().join("2018/02 February/Wedding/IMG_20180215_090000.jpg")
+        );
+    }
+
+    #[test]
+    fn a_subfolder_not_nested_under_the_date_folder_is_not_preserved() {
+        // "misc" isn't part of the date structure at all — falls back to
+        // the plain templated folder, same as before this feature existed.
+        let library = tempfile::tempdir().unwrap();
+        fs::create_dir_all(library.path().join("misc/Wedding")).unwrap();
+        fs::write(
+            library.path().join("misc/Wedding/IMG_20180215_090000.jpg"),
+            b"fixture",
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "{yyyy}/{mm} {month_name}",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let item = find(&plan, "IMG_20180215_090000.jpg");
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &library.path().join("2018/02 February/IMG_20180215_090000.jpg")
         );
     }
 
