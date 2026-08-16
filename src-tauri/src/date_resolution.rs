@@ -1,4 +1,5 @@
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
+use serde::Serialize;
 
 use crate::filename_patterns::match_filename;
 
@@ -11,7 +12,8 @@ const XMP_CONFIDENCE: f32 = 0.9;
 const FS_CREATED_CONFIDENCE: f32 = 0.3;
 const FS_MODIFIED_CONFIDENCE: f32 = 0.2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DateSource {
     Exif,
     Xmp,
@@ -37,7 +39,7 @@ impl DateSource {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DateCandidate {
     pub date: NaiveDateTime,
     pub source: DateSource,

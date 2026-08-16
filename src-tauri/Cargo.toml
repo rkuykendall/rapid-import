@@ -3,13 +3,14 @@ name = "rapid-import"
 description = "Photo/video auto-sort and import tool with multi-source date resolution."
 edition = "2024"
 rust-version = "1.92"
+default-run = "rapid-import"
 
 [lib]
 name = "rapid_import_core"
 path = "src/lib.rs"
 
 [dependencies]
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 regex = "1.12"
 walkdir = "2.5"
 kamadak-exif = "0.6.1"
@@ -20,6 +21,12 @@ blake3 = "1.8"
 image = "0.25"
 image_hasher = "3.0"
 anyhow = "1.0"
+tauri = { version = "2.9", features = ["macos-private-api"] }
+tauri-plugin-dialog = "2.4"
+tauri-plugin-os = "2.3"
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
 
 [dev-dependencies]
 tempfile = "3.23"

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use chrono::NaiveDateTime;
+use serde::Serialize;
 
 use crate::date_resolution::DateCandidate;
 use crate::profiles::ConflictPolicy;
@@ -10,7 +11,8 @@ use crate::profiles::ConflictPolicy;
 /// against real test libraries.
 pub const NEEDS_REVIEW_THRESHOLD: f32 = 0.7;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConflictKind {
     None,
     /// A *different* file already exists at the computed destination path —
@@ -24,7 +26,7 @@ pub enum ConflictKind {
     DuplicateInPlan,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanItem {
     pub source_path: PathBuf,
     /// Full candidate list, best-first, so the review UI can show alternates.
@@ -76,7 +78,7 @@ impl PlanItem {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct Plan {
     pub items: Vec<PlanItem>,
 }
