@@ -11,6 +11,11 @@ path = "src/lib.rs"
 [dependencies]
 chrono = "0.4"
 regex = "1.12"
+walkdir = "2.5"
+kamadak-exif = "0.6.1"
+
+[dev-dependencies]
+tempfile = "3.23"
 
 [profile.dev]
 opt-level = 1

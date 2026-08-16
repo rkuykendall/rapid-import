@@ -94,15 +94,15 @@ pub fn resolve(inputs: &DateInputs, now: NaiveDate) -> DateResolution {
             pattern_name: None,
         });
     }
-    if let Some(m) = match_filename(inputs.filename) {
-        if is_plausible(m.date, now) {
-            candidates.push(DateCandidate {
-                date: m.date,
-                source: DateSource::Filename,
-                confidence: m.confidence,
-                pattern_name: Some(m.pattern_name),
-            });
-        }
+    if let Some(m) = match_filename(inputs.filename)
+        && is_plausible(m.date, now)
+    {
+        candidates.push(DateCandidate {
+            date: m.date,
+            source: DateSource::Filename,
+            confidence: m.confidence,
+            pattern_name: Some(m.pattern_name),
+        });
     }
     if let Some(date) = inputs.fs_created.filter(|d| is_plausible(*d, now)) {
         candidates.push(DateCandidate {
