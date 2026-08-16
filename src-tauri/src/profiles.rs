@@ -37,13 +37,14 @@ impl ConflictPolicy {
 }
 
 /// One saved import configuration — SD card model, phone dump, Downloads
-/// folder, etc. — per §4 Tier 3.
+/// folder, etc. — per §4 Tier 3. Filenames are always preserved as-is
+/// (touched only when `commit.rs` must disambiguate a genuine conflict) —
+/// there is deliberately no filename template.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Profile {
     pub id: i64,
     pub name: String,
     pub folder_template: String,
-    pub filename_template: Option<String>,
     pub date_fallback_order: Vec<String>,
     pub conflict_policy: ConflictPolicy,
 }
@@ -52,7 +53,6 @@ pub struct Profile {
 pub struct NewProfile {
     pub name: String,
     pub folder_template: String,
-    pub filename_template: Option<String>,
     pub date_fallback_order: Vec<String>,
     pub conflict_policy: ConflictPolicy,
 }
@@ -61,12 +61,11 @@ pub fn save_profile(conn: &Connection, profile: &NewProfile) -> rusqlite::Result
     let fallback_json = serde_json::to_string(&profile.date_fallback_order)
         .expect("Vec<String> always serializes");
     conn.execute(
-        "INSERT INTO profiles (name, folder_template, filename_template, date_fallback_order, conflict_policy)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO profiles (name, folder_template, date_fallback_order, conflict_policy)
+         VALUES (?1, ?2, ?3, ?4)",
         params![
             profile.name,
             profile.folder_template,
-            profile.filename_template,
             fallback_json,
             profile.conflict_policy.as_str(),
         ],
@@ -76,7 +75,7 @@ pub fn save_profile(conn: &Connection, profile: &NewProfile) -> rusqlite::Result
 
 pub fn load_profiles(conn: &Connection) -> rusqlite::Result<Vec<Profile>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, folder_template, filename_template, date_fallback_order, conflict_policy
+        "SELECT id, name, folder_template, date_fallback_order, conflict_policy
          FROM profiles ORDER BY id",
     )?;
     let rows = stmt.query_map([], row_to_profile)?;
@@ -85,7 +84,7 @@ pub fn load_profiles(conn: &Connection) -> rusqlite::Result<Vec<Profile>> {
 
 pub fn load_profile(conn: &Connection, id: i64) -> rusqlite::Result<Option<Profile>> {
     conn.query_row(
-        "SELECT id, name, folder_template, filename_template, date_fallback_order, conflict_policy
+        "SELECT id, name, folder_template, date_fallback_order, conflict_policy
          FROM profiles WHERE id = ?1",
         params![id],
         row_to_profile,
@@ -99,16 +98,15 @@ pub fn delete_profile(conn: &Connection, id: i64) -> rusqlite::Result<()> {
 }
 
 fn row_to_profile(row: &rusqlite::Row) -> rusqlite::Result<Profile> {
-    let fallback_json: String = row.get(4)?;
+    let fallback_json: String = row.get(3)?;
     let date_fallback_order: Vec<String> = serde_json::from_str(&fallback_json)
-        .map_err(|e| rusqlite::Error::InvalidColumnType(4, e.to_string(), rusqlite::types::Type::Text))?;
-    let conflict_policy_str: String = row.get(5)?;
+        .map_err(|e| rusqlite::Error::InvalidColumnType(3, e.to_string(), rusqlite::types::Type::Text))?;
+    let conflict_policy_str: String = row.get(4)?;
 
     Ok(Profile {
         id: row.get(0)?,
         name: row.get(1)?,
         folder_template: row.get(2)?,
-        filename_template: row.get(3)?,
         date_fallback_order,
         conflict_policy: ConflictPolicy::parse(&conflict_policy_str)?,
     })
@@ -123,7 +121,6 @@ mod tests {
         NewProfile {
             name: "SD Card".to_string(),
             folder_template: "{yyyy}/{yyyy}-{mm}-{dd}".to_string(),
-            filename_template: None,
             date_fallback_order: vec![
                 "exif".to_string(),
                 "filename".to_string(),

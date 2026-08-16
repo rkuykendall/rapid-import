@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS profiles (
     id                  INTEGER PRIMARY KEY,
     name                TEXT NOT NULL,
     folder_template     TEXT NOT NULL,
-    filename_template   TEXT,
     date_fallback_order TEXT NOT NULL,
     conflict_policy     TEXT NOT NULL
 );
