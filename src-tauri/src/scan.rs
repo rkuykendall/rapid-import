@@ -12,6 +12,7 @@ use crate::date_resolution::{self, DateInputs};
 use crate::db;
 use crate::dedup;
 use crate::plan::{render_template, ConflictKind, Plan, PlanItem, NEEDS_REVIEW_THRESHOLD};
+use crate::sidecar_interop;
 
 pub struct ScanOptions<'a> {
     pub source_root: &'a Path,
@@ -50,7 +51,7 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
     let inputs = DateInputs {
         filename,
         exif_date_time_original: read_exif_date(source_path),
-        xmp_date_time_original: None,
+        xmp_date_time_original: sidecar_interop::read_xmp_date(source_path),
         fs_created: file_time(source_path, |m| m.created()),
         fs_modified: file_time(source_path, |m| m.modified()),
     };
@@ -282,6 +283,41 @@ mod tests {
         assert!(item.needs_review);
         assert!(item.chosen().unwrap().confidence < NEEDS_REVIEW_THRESHOLD);
         assert!(item.destination_path.is_some());
+    }
+
+    #[test]
+    fn xmp_sidecar_date_flows_through_to_the_resolved_plan() {
+        // No EXIF, no filename pattern — a RAW file with only a Lightroom
+        // XMP sidecar for its capture date, the exact scenario this
+        // integration is meant to cover.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        fs::write(source.path().join("DSC00001.CR3"), b"raw bytes").unwrap();
+        fs::write(
+            source.path().join("DSC00001.xmp"),
+            br#"<rdf:Description exif:DateTimeOriginal="2023-08-15T14:15:23" xmlns:exif="http://ns.adobe.com/exif/1.0/"/>"#,
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let item = find(&plan, "DSC00001.CR3");
+        let chosen = item.chosen().unwrap();
+        assert_eq!(chosen.source, crate::date_resolution::DateSource::Xmp);
+        assert_eq!(chosen.confidence, 0.9);
+        assert!(!item.needs_review);
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &destination.path().join("2023/2023-08-15/DSC00001.CR3")
+        );
     }
 
     #[test]

@@ -6,3 +6,4 @@ pub mod filename_patterns;
 pub mod plan;
 pub mod profiles;
 pub mod scan;
+pub mod sidecar_interop;

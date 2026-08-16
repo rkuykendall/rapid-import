@@ -125,6 +125,28 @@ pub fn find_by_content_hash(conn: &Connection, content_hash: &str) -> rusqlite::
     .optional()
 }
 
+#[derive(Debug, Clone)]
+pub struct IndexedFileHash {
+    pub current_path: String,
+    pub content_hash: String,
+    pub perceptual_hash: Option<String>,
+}
+
+/// Bulk fetch of every indexed file's hashes, for `dedup::find_duplicates`
+/// to cross-reference a scan against — a single query beats one round-trip
+/// per scanned file.
+pub fn all_file_hashes(conn: &Connection) -> rusqlite::Result<Vec<IndexedFileHash>> {
+    let mut stmt = conn.prepare("SELECT current_path, content_hash, perceptual_hash FROM files")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(IndexedFileHash {
+            current_path: row.get(0)?,
+            content_hash: row.get(1)?,
+            perceptual_hash: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +204,55 @@ mod tests {
         assert_eq!(found.as_deref(), Some("/library/2023/2023-08-15/IMG_0001.jpg"));
 
         assert!(find_by_content_hash(&conn, "not-present").unwrap().is_none());
+    }
+
+    #[test]
+    fn all_file_hashes_returns_every_row() {
+        let conn = open_in_memory().unwrap();
+        let batch_id = insert_batch(
+            &conn,
+            &NewBatch {
+                started_at: "2026-08-16T00:00:00".to_string(),
+                profile_id: None,
+                kind: "import".to_string(),
+                undo_log_path: "/tmp/undo.json".to_string(),
+            },
+        )
+        .unwrap();
+
+        insert_file(
+            &conn,
+            &NewFileRecord {
+                content_hash: "abc123".to_string(),
+                perceptual_hash: Some("phash-a".to_string()),
+                current_path: "/library/a.jpg".to_string(),
+                capture_date: None,
+                date_source: None,
+                date_confidence: None,
+                imported_at: "2026-08-16T00:00:01".to_string(),
+                batch_id,
+            },
+        )
+        .unwrap();
+        insert_file(
+            &conn,
+            &NewFileRecord {
+                content_hash: "def456".to_string(),
+                perceptual_hash: None,
+                current_path: "/library/b.jpg".to_string(),
+                capture_date: None,
+                date_source: None,
+                date_confidence: None,
+                imported_at: "2026-08-16T00:00:01".to_string(),
+                batch_id,
+            },
+        )
+        .unwrap();
+
+        let hashes = all_file_hashes(&conn).unwrap();
+        assert_eq!(hashes.len(), 2);
+        assert!(hashes.iter().any(|h| h.current_path == "/library/a.jpg" && h.perceptual_hash.as_deref() == Some("phash-a")));
+        assert!(hashes.iter().any(|h| h.current_path == "/library/b.jpg" && h.perceptual_hash.is_none()));
     }
 
     #[test]

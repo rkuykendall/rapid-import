@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use chrono::Local;
 
 use rapid_import_core::db;
+use rapid_import_core::dedup::{self, DuplicateKind};
 use rapid_import_core::plan::ConflictKind;
 use rapid_import_core::scan::{scan, ScanOptions};
 
@@ -83,6 +84,22 @@ fn main() -> ExitCode {
             "{}\n  -> {destination}\n     date: {date_str}  source: {source_str}  confidence: {confidence_str}{flags_str}\n",
             item.source_path.display(),
         );
+    }
+
+    if let Some(conn) = conn.as_ref() {
+        let duplicates = dedup::find_duplicates(conn, &items);
+        if !duplicates.is_empty() {
+            println!("Duplicate groups:");
+            for group in &duplicates {
+                let kind_str = match group.kind {
+                    DuplicateKind::Exact => "EXACT".to_string(),
+                    DuplicateKind::Near { distance } => format!("NEAR (distance {distance})"),
+                };
+                let members: Vec<String> = group.members.iter().map(|p| p.display().to_string()).collect();
+                println!("  [{kind_str}] {}", members.join("  <->  "));
+            }
+            println!();
+        }
     }
 
     let total = items.len();
