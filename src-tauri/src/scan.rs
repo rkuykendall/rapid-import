@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
+use rusqlite::Connection;
 use walkdir::WalkDir;
 
 use crate::date_resolution::{self, DateInputs};
+use crate::db;
+use crate::dedup;
 use crate::plan::{render_template, ConflictKind, Plan, PlanItem, NEEDS_REVIEW_THRESHOLD};
 
 pub struct ScanOptions<'a> {
@@ -15,6 +18,10 @@ pub struct ScanOptions<'a> {
     pub destination_root: &'a Path,
     pub folder_template: &'a str,
     pub now: NaiveDate,
+    /// Optional index to cross-reference by content hash — flags items
+    /// whose bytes already appear in a previous import (e.g. re-scanning
+    /// the same SD card). `None` skips the check (and the hashing cost).
+    pub index: Option<&'a Connection>,
 }
 
 /// Recursively walks `source_root` (nested/already-organized trees included
@@ -61,13 +68,27 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
         options.destination_root.join(rendered_folder).join(filename)
     });
 
+    let already_imported = options
+        .index
+        .map(|conn| is_already_imported(conn, source_path))
+        .unwrap_or(false);
+
     PlanItem {
         source_path: source_path.to_path_buf(),
         candidates: resolution.candidates,
         destination_path,
         needs_review,
         conflict: ConflictKind::None,
+        no_op: false,
+        already_imported,
     }
+}
+
+fn is_already_imported(conn: &Connection, source_path: &Path) -> bool {
+    let Ok(hash) = dedup::content_hash(source_path) else {
+        return false;
+    };
+    matches!(db::find_by_content_hash(conn, &hash), Ok(Some(_)))
 }
 
 fn read_exif_date(path: &Path) -> Option<NaiveDateTime> {
@@ -92,9 +113,10 @@ fn file_time(
     Some(datetime.naive_local())
 }
 
-/// Flags destinations that collide with an existing file on disk, or with
-/// another item resolved in this same plan. SQLite-index cross-referencing
-/// (§5) lands once the index exists.
+/// Flags no-ops (source already sits at its computed destination — the
+/// reorganize-in-place case) and conflicts: destinations that collide with
+/// an existing file on disk, or with another item resolved in this same
+/// plan.
 fn flag_conflicts(items: &mut [PlanItem]) {
     let mut destination_counts: HashMap<PathBuf, usize> = HashMap::new();
     for item in items.iter() {
@@ -107,11 +129,28 @@ fn flag_conflicts(items: &mut [PlanItem]) {
         let Some(dest) = &item.destination_path else {
             continue;
         };
+
+        if is_same_file(&item.source_path, dest) {
+            item.no_op = true;
+            continue;
+        }
+
         if destination_counts.get(dest).copied().unwrap_or(0) > 1 {
             item.conflict = ConflictKind::DuplicateInPlan;
         } else if dest.exists() {
             item.conflict = ConflictKind::DestinationExists;
         }
+    }
+}
+
+/// Canonicalizes both sides before comparing so a reorganize-in-place scan
+/// (where source and destination roots overlap) recognizes a file already
+/// sitting at its correctly-computed path, rather than flagging itself as a
+/// conflict with itself.
+fn is_same_file(source: &Path, destination: &Path) -> bool {
+    match (fs::canonicalize(source), fs::canonicalize(destination)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -149,6 +188,7 @@ mod tests {
             destination_root: destination.path(),
             folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
             now: today(),
+            index: None,
         };
         let plan = scan(&options);
 
@@ -180,6 +220,7 @@ mod tests {
             destination_root: destination.path(),
             folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
             now: today(),
+            index: None,
         };
         let plan = scan(&options);
 
@@ -209,6 +250,7 @@ mod tests {
             destination_root: destination.path(),
             folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
             now: today(),
+            index: None,
         };
         let plan = scan(&options);
 
@@ -232,6 +274,7 @@ mod tests {
             destination_root: destination.path(),
             folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
             now: today(),
+            index: None,
         };
         let plan = scan(&options);
 
@@ -239,5 +282,129 @@ mod tests {
         assert!(item.needs_review);
         assert!(item.chosen().unwrap().confidence < NEEDS_REVIEW_THRESHOLD);
         assert!(item.destination_path.is_some());
+    }
+
+    #[test]
+    fn reorganize_in_place_already_correct_location_is_a_noop() {
+        // Source and destination overlap — the actual reorganize-in-place
+        // scenario — and the file already sits where it computes to.
+        let library = tempfile::tempdir().unwrap();
+        fs::create_dir_all(library.path().join("2023/2023-08-15")).unwrap();
+        fs::write(
+            library.path().join("2023/2023-08-15/IMG_20230815_141523.jpg"),
+            b"fixture",
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let item = find(&plan, "IMG_20230815_141523.jpg");
+        assert!(item.no_op);
+        assert_eq!(item.conflict, ConflictKind::None);
+    }
+
+    #[test]
+    fn reorganize_in_place_misfiled_file_is_still_a_pending_move() {
+        let library = tempfile::tempdir().unwrap();
+        // Sits in the wrong folder for its own resolved date.
+        fs::create_dir_all(library.path().join("misc")).unwrap();
+        fs::write(
+            library.path().join("misc/IMG_20230815_141523.jpg"),
+            b"fixture",
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let item = find(&plan, "IMG_20230815_141523.jpg");
+        assert!(!item.no_op);
+        assert_eq!(item.conflict, ConflictKind::None);
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &library.path().join("2023/2023-08-15/IMG_20230815_141523.jpg")
+        );
+    }
+
+    #[test]
+    fn flags_files_already_present_in_the_index_by_content_hash() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("IMG_20230815_141523.jpg"),
+            b"exact same bytes",
+        )
+        .unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "import".to_string(),
+                undo_log_path: "/tmp/undo.json".to_string(),
+            },
+        )
+        .unwrap();
+        let hash = dedup::content_hash(&source.path().join("IMG_20230815_141523.jpg")).unwrap();
+        db::insert_file(
+            &conn,
+            &db::NewFileRecord {
+                content_hash: hash,
+                perceptual_hash: None,
+                current_path: "/library/2023/2023-08-15/IMG_20230815_141523.jpg".to_string(),
+                capture_date: Some("2023-08-15T14:15:23".to_string()),
+                date_source: Some("exif".to_string()),
+                date_confidence: Some(0.95),
+                imported_at: "2026-08-01T00:00:01".to_string(),
+                batch_id,
+            },
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+
+        assert!(find(&plan, "IMG_20230815_141523.jpg").already_imported);
+    }
+
+    #[test]
+    fn does_not_flag_new_files_as_already_imported() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("IMG_20230815_141523.jpg"), b"brand new bytes").unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "{yyyy}/{yyyy}-{mm}-{dd}",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+
+        assert!(!find(&plan, "IMG_20230815_141523.jpg").already_imported);
     }
 }

@@ -26,6 +26,12 @@ pub struct PlanItem {
     pub destination_path: Option<PathBuf>,
     pub needs_review: bool,
     pub conflict: ConflictKind,
+    /// True when source and destination already resolve to the same file on
+    /// disk — reorganize-in-place found nothing to do for this item.
+    pub no_op: bool,
+    /// True when this file's content hash already exists in the SQLite
+    /// index, e.g. re-scanning the same SD card after a prior import.
+    pub already_imported: bool,
 }
 
 impl PlanItem {
