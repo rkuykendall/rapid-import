@@ -25,6 +25,19 @@ pub struct UndoManifest {
     pub moves: Vec<UndoMove>,
 }
 
+/// What to do with a file whose content already exists elsewhere (the
+/// index, or right at its computed destination). `Skip` matches what every
+/// import tool does by default — and is the only sane choice for a plain
+/// import, since there's no reason to touch a source device/card beyond
+/// copying files off it. `MoveToDuplicatesFolder` exists for reorganizing
+/// an *existing* library in place, where leaving a duplicate sitting at its
+/// messy original spot would undercut the whole point of the pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuplicatePolicy {
+    Skip,
+    MoveToDuplicatesFolder,
+}
+
 #[derive(Debug, Default)]
 pub struct CommitSummary {
     pub batch_id: i64,
@@ -33,12 +46,14 @@ pub struct CommitSummary {
     /// destination — nothing to move.
     pub already_in_place: usize,
     /// Items whose content hash already exists in the index (e.g.
-    /// re-importing from the same SD card) — left untouched at the source.
+    /// re-importing from the same SD card). Left untouched at the source
+    /// under `DuplicatePolicy::Skip`; relocated into `Duplicates/` under
+    /// `DuplicatePolicy::MoveToDuplicatesFolder`.
     pub already_imported: usize,
     /// The destination path was already occupied, but by a byte-identical
     /// file — not caught by the index (e.g. it was never imported through
-    /// this tool). Left untouched at the source; nothing would be gained by
-    /// moving a duplicate.
+    /// this tool). Same disposition as `already_imported`, governed by the
+    /// same `DuplicatePolicy`.
     pub duplicate_at_destination: usize,
     /// Items skipped due to a genuine naming collision (different content)
     /// under `ConflictPolicy::Skip`.
@@ -52,10 +67,12 @@ pub struct CommitSummary {
 pub struct CommitOptions<'a> {
     pub conn: &'a Connection,
     pub undo_log_dir: &'a Path,
+    pub destination_root: &'a Path,
     /// `"import"` | `"reorganize"`.
     pub kind: &'a str,
     pub profile_id: Option<i64>,
     pub conflict_policy: ConflictPolicy,
+    pub duplicate_policy: DuplicatePolicy,
 }
 
 /// Executes a dry-run `Plan` against disk — the only place in the app that
@@ -205,10 +222,6 @@ fn commit_item(
         summary.already_in_place += 1;
         return Ok(());
     }
-    if item.already_imported {
-        summary.already_imported += 1;
-        return Ok(());
-    }
     if item.excluded {
         // Caller's explicit "don't import this one" wins regardless of
         // conflict status — checked ahead of any conflict detection so it
@@ -221,12 +234,19 @@ fn commit_item(
         .source_path
         .file_name()
         .context("source path has no filename")?;
-    let mut destination = target_folder.join(filename);
 
     // Computed once, before any move, and reused below for the index row —
     // the file's bytes don't change across a rename/copy, so this stays
     // valid post-move and avoids hashing the file twice.
     let source_hash = dedup::content_hash(&item.source_path).ok();
+
+    if item.already_imported {
+        relocate_duplicate(item, filename, target_folder, source_hash, options, batch_id, undo_moves)?;
+        summary.already_imported += 1;
+        return Ok(());
+    }
+
+    let mut destination = target_folder.join(filename);
 
     if destination.exists() {
         let identical =
@@ -236,6 +256,7 @@ fn commit_item(
             // duplicate. There's no `Overwrite` policy to fall back on
             // here: identical content is always safe to leave alone,
             // different content (below) is never safe to destroy.
+            relocate_duplicate(item, filename, target_folder, source_hash, options, batch_id, undo_moves)?;
             summary.duplicate_at_destination += 1;
             return Ok(());
         }
@@ -250,13 +271,59 @@ fn commit_item(
 
     fs::create_dir_all(target_folder)?;
     move_file(&item.source_path, &destination)?;
+    record_move(options.conn, batch_id, item, &destination, source_hash, undo_moves)?;
+    summary.moved += 1;
 
+    Ok(())
+}
+
+/// Under `DuplicatePolicy::Skip`, does nothing — the duplicate stays right
+/// where it is. Under `MoveToDuplicatesFolder`, relocates it into
+/// `<destination_root>/Duplicates/<same date-folder structure>/`, mirroring
+/// where it would have landed had it not been a duplicate, so duplicates
+/// stay reviewable in the same shape as the rest of the library.
+fn relocate_duplicate(
+    item: &PlanItem,
+    filename: &std::ffi::OsStr,
+    target_folder: &Path,
+    source_hash: Option<String>,
+    options: &CommitOptions,
+    batch_id: i64,
+    undo_moves: &mut Vec<UndoMove>,
+) -> Result<()> {
+    if options.duplicate_policy == DuplicatePolicy::Skip {
+        return Ok(());
+    }
+
+    let relative = target_folder.strip_prefix(options.destination_root).unwrap_or(target_folder);
+    let duplicates_folder = options.destination_root.join("Duplicates").join(relative);
+    let destination = duplicates_folder.join(filename);
+
+    if destination.exists() {
+        // Another duplicate already parked here (e.g. re-running a
+        // reorganize pass) — nothing new to do.
+        return Ok(());
+    }
+
+    fs::create_dir_all(&duplicates_folder)?;
+    move_file(&item.source_path, &destination)?;
+    record_move(options.conn, batch_id, item, &destination, source_hash, undo_moves)
+}
+
+fn record_move(
+    conn: &Connection,
+    batch_id: i64,
+    item: &PlanItem,
+    destination: &Path,
+    source_hash: Option<String>,
+    undo_moves: &mut Vec<UndoMove>,
+) -> Result<()> {
     let chosen = item.chosen();
     db::insert_file(
-        options.conn,
+        conn,
         &db::NewFileRecord {
             content_hash: source_hash.unwrap_or_default(),
-            perceptual_hash: dedup::perceptual_hash(&destination),
+            perceptual_hash: dedup::perceptual_hash(destination),
             current_path: destination.to_string_lossy().to_string(),
             capture_date: chosen.map(|c| c.date.format("%Y-%m-%dT%H:%M:%S").to_string()),
             date_source: chosen.map(|c| date_source_label(c.source).to_string()),
@@ -270,7 +337,6 @@ fn commit_item(
         from: item.source_path.to_string_lossy().to_string(),
         to: destination.to_string_lossy().to_string(),
     });
-    summary.moved += 1;
 
     Ok(())
 }
@@ -342,13 +408,15 @@ mod tests {
         }
     }
 
-    fn options<'a>(conn: &'a Connection, undo_log_dir: &'a Path) -> CommitOptions<'a> {
+    fn options<'a>(conn: &'a Connection, undo_log_dir: &'a Path, destination_root: &'a Path) -> CommitOptions<'a> {
         CommitOptions {
             conn,
             undo_log_dir,
+            destination_root,
             kind: "import",
             profile_id: None,
             conflict_policy: ConflictPolicy::Skip,
+            duplicate_policy: DuplicatePolicy::Skip,
         }
     }
 
@@ -367,7 +435,7 @@ mod tests {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
         };
 
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.moved, 1);
         assert!(!src_path.exists());
@@ -404,7 +472,7 @@ mod tests {
             ],
         };
 
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.moved, 2);
         assert!(primary_dest.exists());
@@ -440,7 +508,7 @@ mod tests {
             ],
         };
 
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.moved, 2);
         assert!(primary_dest.exists());
@@ -474,7 +542,7 @@ mod tests {
             items: vec![primary, sibling],
         };
 
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.excluded, 1);
         assert_eq!(summary.moved, 1);
@@ -500,7 +568,7 @@ mod tests {
         noop_item.no_op = true;
 
         let plan = Plan { items: vec![noop_item] };
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), library.path())).unwrap();
 
         assert_eq!(summary.moved, 0);
         assert_eq!(summary.already_in_place, 1);
@@ -523,7 +591,7 @@ mod tests {
         dup_item.already_imported = true;
 
         let plan = Plan { items: vec![dup_item] };
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.moved, 0);
         assert_eq!(summary.already_imported, 1);
@@ -546,7 +614,7 @@ mod tests {
         excluded_item.excluded = true;
 
         let plan = Plan { items: vec![excluded_item] };
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.excluded, 1);
         assert_eq!(summary.moved, 0);
@@ -575,7 +643,7 @@ mod tests {
         excluded_item.excluded = true;
 
         let plan = Plan { items: vec![excluded_item] };
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.excluded, 1);
         assert_eq!(summary.skipped, 0);
@@ -585,12 +653,15 @@ mod tests {
     }
 
     #[test]
-    fn identical_content_at_destination_is_left_alone_regardless_of_policy() {
+    fn identical_content_at_destination_is_left_alone_under_skip_duplicate_policy() {
         // Not caught by `already_imported` (that's an index lookup) — this
         // is the filesystem-only safety net: a byte-identical file already
         // sits at the computed destination (e.g. it was placed there by
-        // hand, never indexed). No `Overwrite` policy exists to reach for;
-        // this is resolved before any policy is consulted at all.
+        // hand, never indexed). No `Overwrite` `ConflictPolicy` exists to
+        // reach for; this is resolved before `ConflictPolicy` is consulted
+        // at all — governed instead by `DuplicatePolicy` (default `Skip`
+        // here; see the `MoveToDuplicatesFolder` tests below for the other
+        // disposition).
         let source = tempfile::tempdir().unwrap();
         let destination = tempfile::tempdir().unwrap();
         let undo_dir = tempfile::tempdir().unwrap();
@@ -606,13 +677,98 @@ mod tests {
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
         };
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.duplicate_at_destination, 1);
         assert_eq!(summary.moved, 0);
         assert_eq!(summary.skipped, 0);
         assert!(src_path.exists(), "source is left in place, not deleted");
         assert_eq!(fs::read_to_string(&dest_path).unwrap(), "identical bytes");
+    }
+
+    #[test]
+    fn move_to_duplicates_folder_relocates_an_already_imported_item_preserving_date_structure() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"fixture").unwrap();
+        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+
+        let mut dup_item = item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)]);
+        dup_item.already_imported = true;
+        let plan = Plan { items: vec![dup_item] };
+
+        let mut opts = options(&conn, undo_dir.path(), destination.path());
+        opts.duplicate_policy = DuplicatePolicy::MoveToDuplicatesFolder;
+        let summary = commit_plan(&plan, &opts).unwrap();
+
+        assert_eq!(summary.already_imported, 1);
+        assert_eq!(summary.moved, 0, "counted under already_imported, not moved");
+        assert!(!src_path.exists(), "relocated out of the source, not left behind");
+        // Same date-folder structure it would have used had it not been a
+        // duplicate, just quarantined under a top-level `Duplicates/`.
+        let relocated = destination.path().join("Duplicates/2023/2023-08-15/IMG_20230815_141523.jpg");
+        assert!(relocated.exists());
+        assert!(!dest_path.exists(), "never placed at its normal computed destination");
+    }
+
+    #[test]
+    fn move_to_duplicates_folder_relocates_identical_content_at_destination() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"identical bytes").unwrap();
+        let dest_folder = destination.path().join("2023/2023-08-15");
+        fs::create_dir_all(&dest_folder).unwrap();
+        let dest_path = dest_folder.join("IMG_20230815_141523.jpg");
+        fs::write(&dest_path, b"identical bytes").unwrap();
+
+        let plan = Plan {
+            items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
+        };
+        let mut opts = options(&conn, undo_dir.path(), destination.path());
+        opts.duplicate_policy = DuplicatePolicy::MoveToDuplicatesFolder;
+        let summary = commit_plan(&plan, &opts).unwrap();
+
+        assert_eq!(summary.duplicate_at_destination, 1);
+        assert!(!src_path.exists());
+        let relocated = destination.path().join("Duplicates/2023/2023-08-15/IMG_20230815_141523.jpg");
+        assert!(relocated.exists());
+        assert_eq!(fs::read_to_string(&dest_path).unwrap(), "identical bytes", "the original at the real destination is untouched");
+    }
+
+    #[test]
+    fn undo_reverses_a_move_to_duplicates_folder_relocation() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"fixture").unwrap();
+        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+
+        let mut dup_item = item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)]);
+        dup_item.already_imported = true;
+        let plan = Plan { items: vec![dup_item] };
+
+        let mut opts = options(&conn, undo_dir.path(), destination.path());
+        opts.duplicate_policy = DuplicatePolicy::MoveToDuplicatesFolder;
+        let summary = commit_plan(&plan, &opts).unwrap();
+
+        let relocated = destination.path().join("Duplicates/2023/2023-08-15/IMG_20230815_141523.jpg");
+        assert!(relocated.exists());
+
+        let restored = undo_batch(&conn, summary.batch_id).unwrap();
+        assert_eq!(restored, 1);
+        assert!(src_path.exists(), "moved back to its original source location");
+        assert!(!relocated.exists());
     }
 
     #[test]
@@ -632,7 +788,7 @@ mod tests {
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
         };
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.moved, 0);
@@ -657,7 +813,7 @@ mod tests {
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
         };
-        let mut opts = options(&conn, undo_dir.path());
+        let mut opts = options(&conn, undo_dir.path(), destination.path());
         opts.conflict_policy = ConflictPolicy::Rename;
         let summary = commit_plan(&plan, &opts).unwrap();
 
@@ -681,7 +837,7 @@ mod tests {
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
         };
-        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
         assert!(dest_path.exists());
 
         let restored = undo_batch(&conn, summary.batch_id).unwrap();

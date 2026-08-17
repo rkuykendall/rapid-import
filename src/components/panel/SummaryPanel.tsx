@@ -1,8 +1,16 @@
 import { Import, Loader2, Search } from 'lucide-react';
 import Button from '../ui/Button';
 import Text from '../ui/Text';
+import Dropdown from '../ui/Dropdown';
 import { TextVariants } from '../../types/typography';
 import { Plan } from '../../types/plan';
+
+export type DuplicatePolicy = 'skip' | 'duplicates_folder';
+
+const DUPLICATE_POLICY_OPTIONS: Array<{ value: DuplicatePolicy; label: string }> = [
+  { value: 'skip', label: 'Skip (leave in place)' },
+  { value: 'duplicates_folder', label: 'Move to Duplicates folder' },
+];
 
 interface StatRowProps {
   label: string;
@@ -40,6 +48,9 @@ interface SummaryPanelProps {
   scannedCount: number;
   onScan(): void;
   error: string | null;
+  isReorganizeInPlace: boolean;
+  duplicatePolicy: DuplicatePolicy;
+  onDuplicatePolicyChange(value: DuplicatePolicy): void;
 }
 
 export default function SummaryPanel({
@@ -50,6 +61,9 @@ export default function SummaryPanel({
   scannedCount,
   onScan,
   error,
+  isReorganizeInPlace,
+  duplicatePolicy,
+  onDuplicatePolicyChange,
 }: SummaryPanelProps) {
   const stats = plan ? summarize(plan) : null;
 
@@ -71,6 +85,17 @@ export default function SummaryPanel({
             <StatRow label="Needs review" value={stats.needsReview} />
             <StatRow label="Conflicts" value={stats.conflicts} />
           </div>
+        )}
+      </div>
+
+      <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-1.5">
+        <Text variant={TextVariants.small} className="uppercase tracking-wide">
+          Duplicates
+        </Text>
+        {isReorganizeInPlace ? (
+          <Dropdown value={duplicatePolicy} onChange={onDuplicatePolicyChange} options={DUPLICATE_POLICY_OPTIONS} />
+        ) : (
+          <Text variant={TextVariants.body}>Skip (leave in place) — the standard for a plain import.</Text>
         )}
       </div>
 

@@ -5,7 +5,7 @@ import Resizer, { Orientation } from './components/ui/Resizer';
 import GlobalTooltip from './components/ui/GlobalTooltip';
 import LeftPanel from './components/panel/LeftPanel';
 import PlanTable from './components/panel/PlanTable';
-import SummaryPanel from './components/panel/SummaryPanel';
+import SummaryPanel, { DuplicatePolicy } from './components/panel/SummaryPanel';
 import { useScan } from './hooks/useScan';
 import { useFolderTemplatePreview } from './hooks/useFolderTemplatePreview';
 import { useDestinationProfile } from './hooks/useDestinationProfile';
@@ -45,6 +45,12 @@ export default function App() {
   const { plan, scannedFor, loading, error, scannedCount, scan } = useScan();
   const templatePreview = useFolderTemplatePreview(folderTemplate);
   const { profiles, refresh: refreshProfiles } = useProfiles();
+  // Not yet wired to a Tauri command — `commit_plan` isn't exposed to the
+  // UI at all yet, so this is inert until that lands. Kept as raw state
+  // (not reset) so a choice made while reorganizing survives toggling
+  // out and back in, but "duplicates_folder" only ever applies while
+  // actually reorganizing — see `effectiveDuplicatePolicy` below.
+  const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>('skip');
   const leftPanel = useResizablePanel(320, 'left');
   const rightPanel = useResizablePanel(320, 'right');
 
@@ -55,6 +61,10 @@ export default function App() {
   // based on the paths alone, so there was never a real distinct "reorganize
   // mode" to track; the checkbox is purely a reflection of that fact.
   const isReorganizeInPlace = hasDestination && sourceRoot === destinationRoot;
+  // "Move to Duplicates folder" only makes sense while reorganizing an
+  // existing library — for a plain import, skip (leaving the source
+  // device/card untouched) is already the standard, correct behavior.
+  const effectiveDuplicatePolicy: DuplicatePolicy = isReorganizeInPlace ? duplicatePolicy : 'skip';
   const canScan = hasDestination && sourceRoot.trim() !== '' && folderTemplate.trim() !== '';
   // Whether the displayed plan (if any) was actually scanned for exactly
   // today's inputs — governs the action button's "Scan" vs "Import" label
@@ -133,6 +143,9 @@ export default function App() {
                 scannedCount={scannedCount}
                 onScan={handleScan}
                 error={error}
+                isReorganizeInPlace={isReorganizeInPlace}
+                duplicatePolicy={effectiveDuplicatePolicy}
+                onDuplicatePolicyChange={setDuplicatePolicy}
               />
             </div>
           </div>
