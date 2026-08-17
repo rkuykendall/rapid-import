@@ -146,13 +146,8 @@ fn group_by_associated_stem(items: &[PlanItem]) -> Vec<FileGroup<'_>> {
             continue;
         }
         let parent = item.source_path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
-        let stem = item
-            .source_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_lowercase();
-        by_key.entry((parent, stem)).or_default().push(item);
+        let key = crate::formats::associated_file_key(&item.source_path);
+        by_key.entry((parent, key)).or_default().push(item);
     }
 
     by_key
@@ -415,6 +410,42 @@ mod tests {
         assert!(primary_dest.exists());
         let sidecar_final = destination.path().join("2023/2023-08-15/IMG_0001.xmp");
         assert!(sidecar_final.exists(), "sidecar should follow the primary's destination folder");
+    }
+
+    #[test]
+    fn extension_preserved_sidecar_moves_with_its_primary() {
+        // RapidRAW's own edit-history/EXIF-cache sidecars (`.rrdata`,
+        // `.rrexif`) are always extension-*preserved* (`IMG_0001.CR3.rrdata`,
+        // never `IMG_0001.rrdata`) — a stricter case than `.xmp`, which the
+        // other test covers in its extension-replaced form. Naive
+        // `file_stem()` would put this in its own group (`"IMG_0001.CR3"` vs
+        // the primary's `"IMG_0001"`), leaving it behind.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let raw_path = source.path().join("IMG_0001.CR3");
+        let rrdata_path = source.path().join("IMG_0001.CR3.rrdata");
+        fs::write(&raw_path, b"raw bytes").unwrap();
+        fs::write(&rrdata_path, b"rrdata bytes").unwrap();
+
+        let primary_dest = destination.path().join("2023/2023-08-15/IMG_0001.CR3");
+        let sidecar_own_dest = destination.path().join("2026/2026-08-16/IMG_0001.CR3.rrdata");
+
+        let plan = Plan {
+            items: vec![
+                item(raw_path.clone(), Some(primary_dest.clone()), vec![candidate(2023, 8, 15, 0.95)]),
+                item(rrdata_path.clone(), Some(sidecar_own_dest), vec![candidate(2026, 8, 16, 0.2)]),
+            ],
+        };
+
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path())).unwrap();
+
+        assert_eq!(summary.moved, 2);
+        assert!(primary_dest.exists());
+        let sidecar_final = destination.path().join("2023/2023-08-15/IMG_0001.CR3.rrdata");
+        assert!(sidecar_final.exists(), "rrdata sidecar should follow the primary's destination folder");
     }
 
     #[test]
