@@ -21,8 +21,15 @@ function Badge({ children, tone }: { children: string; tone: 'info' | 'warning' 
   );
 }
 
-function filename(path: string): string {
-  return path.split('/').pop() ?? path;
+// Strips `root` off the front of `path`, leaving the part relative to it —
+// e.g. a source/destination root of "/Users/x/Pictures" turns
+// "/Users/x/Pictures/2024/IMG_0001.jpg" into "2024/IMG_0001.jpg". Falls
+// back to the full path if `root` is empty or isn't actually a prefix
+// (shouldn't happen given `scannedFor`, but stay safe rather than lie).
+function relativeTo(path: string, root: string): string {
+  if (!root) return path;
+  const normalizedRoot = root.endsWith('/') ? root : `${root}/`;
+  return path.startsWith(normalizedRoot) ? path.slice(normalizedRoot.length) : path;
 }
 
 // Same badge set (and the same precedence) as scan_cli's flag rendering in
@@ -73,31 +80,37 @@ function matchesFilter(item: PlanItem, filter: StatusFilter): boolean {
   }
 }
 
-type SortKey = 'filename' | 'date' | 'confidence' | 'destination';
+type SortKey = 'source' | 'destination' | 'date' | 'confidence';
 
 function sortValue(item: PlanItem, key: SortKey): string | number {
   switch (key) {
-    case 'filename':
-      return filename(item.source_path);
+    case 'source':
+      return item.source_path;
+    case 'destination':
+      return item.destination_path ?? '';
     case 'date':
       return item.candidates[0]?.date ?? '';
     case 'confidence':
       return item.candidates[0]?.confidence ?? 0;
-    case 'destination':
-      return item.destination_path ?? '';
   }
 }
 
 const COLUMNS: Array<{ key: SortKey; label: string }> = [
-  { key: 'filename', label: 'Filename' },
+  { key: 'source', label: 'Source' },
+  { key: 'destination', label: 'Destination' },
   { key: 'date', label: 'Resolved date' },
   { key: 'confidence', label: 'Confidence' },
-  { key: 'destination', label: 'Destination' },
 ];
 
-export default function PlanTable({ plan }: { plan: Plan | null }) {
+interface PlanTableProps {
+  plan: Plan | null;
+  sourceRoot: string;
+  destinationRoot: string;
+}
+
+export default function PlanTable({ plan, sourceRoot, destinationRoot }: PlanTableProps) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [sortKey, setSortKey] = useState<SortKey>('filename');
+  const [sortKey, setSortKey] = useState<SortKey>('source');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const rows = useMemo(() => {
@@ -182,19 +195,19 @@ export default function PlanTable({ plan }: { plan: Plan | null }) {
                           className="px-4 py-2 border-b border-border-color max-w-xs truncate"
                           data-tooltip={item.source_path}
                         >
-                          {filename(item.source_path)}
+                          {relativeTo(item.source_path, sourceRoot)}
+                        </td>
+                        <td
+                          className="px-4 py-2 border-b border-border-color max-w-xs truncate text-text-secondary"
+                          data-tooltip={item.destination_path ?? undefined}
+                        >
+                          {item.destination_path ? relativeTo(item.destination_path, destinationRoot) : '(unresolved)'}
                         </td>
                         <td className="px-4 py-2 border-b border-border-color whitespace-nowrap text-text-secondary">
                           {chosen ? `${chosen.date.replace('T', ' ')} · ${chosen.source}` : '—'}
                         </td>
                         <td className="px-4 py-2 border-b border-border-color text-text-secondary">
                           {chosen ? `${(chosen.confidence * 100).toFixed(0)}%` : '—'}
-                        </td>
-                        <td
-                          className="px-4 py-2 border-b border-border-color max-w-sm truncate text-text-secondary"
-                          data-tooltip={item.destination_path ?? undefined}
-                        >
-                          {item.destination_path ?? '(unresolved)'}
                         </td>
                         <td className="px-4 py-2 border-b border-border-color">
                           <div className="flex gap-1.5 flex-wrap">

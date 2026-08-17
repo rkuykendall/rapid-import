@@ -111,7 +111,11 @@ export default function App() {
                   </div>
                 </>
               ) : (
-                <PlanTable plan={plan} />
+                <PlanTable
+                  plan={plan}
+                  sourceRoot={scannedFor?.sourceRoot ?? ''}
+                  destinationRoot={scannedFor?.destinationRoot ?? ''}
+                />
               )}
             </div>
 
