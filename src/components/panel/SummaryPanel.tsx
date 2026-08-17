@@ -103,11 +103,7 @@ export default function SummaryPanel({
         <Text variant={TextVariants.small} className="uppercase tracking-wide">
           Transfer
         </Text>
-        {isReorganizeInPlace ? (
-          <Text variant={TextVariants.body}>Move — reorganizing files within the same library.</Text>
-        ) : (
-          <Dropdown value={transferMode} onChange={onTransferModeChange} options={TRANSFER_MODE_OPTIONS} />
-        )}
+        <Dropdown value={transferMode} onChange={onTransferModeChange} options={TRANSFER_MODE_OPTIONS} />
       </div>
 
       <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-1.5">

@@ -51,10 +51,10 @@ export default function App() {
   // out and back in, but "duplicates_folder" only ever applies while
   // actually reorganizing — see `effectiveDuplicatePolicy` below.
   const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>('skip');
-  // Same story: inert until `commit_plan` is wired up. Defaults to copy —
-  // the standard for a plain import (never touch the source device beyond
-  // reading it) — but reorganizing in place must always be a move; see
-  // `effectiveTransferMode` below.
+  // Same story: inert until `commit_plan` is wired up. Always freely
+  // pickable (unlike duplicate policy above) — it just re-defaults to
+  // Move whenever `isReorganizeInPlace` flips true and Copy when it flips
+  // false, via the effect below, rather than being forced either way.
   const [transferMode, setTransferMode] = useState<TransferMode>('copy');
   const leftPanel = useResizablePanel(320, 'left');
   const rightPanel = useResizablePanel(320, 'right');
@@ -70,10 +70,6 @@ export default function App() {
   // existing library — for a plain import, skip (leaving the source
   // device/card untouched) is already the standard, correct behavior.
   const effectiveDuplicatePolicy: DuplicatePolicy = isReorganizeInPlace ? duplicatePolicy : 'skip';
-  // Copying onto the same tree you're reorganizing would just leave a
-  // duplicate at both the old and new location — reorganize-in-place must
-  // always be a move, regardless of what's stored above.
-  const effectiveTransferMode: TransferMode = isReorganizeInPlace ? 'move' : transferMode;
   const canScan = hasDestination && sourceRoot.trim() !== '' && folderTemplate.trim() !== '';
   // Whether the displayed plan (if any) was actually scanned for exactly
   // today's inputs — governs the action button's "Scan" vs "Import" label
@@ -90,6 +86,14 @@ export default function App() {
     refreshProfiles();
     scan(sourceRoot, destinationRoot, folderTemplate);
   };
+
+  // Re-default Transfer to Move the moment source/destination start
+  // matching, and back to Copy the moment they stop — a starting point
+  // only, not an override, so a deliberate choice made mid-mode (e.g.
+  // Copy while reorganizing) survives until the mode itself flips again.
+  useEffect(() => {
+    setTransferMode(isReorganizeInPlace ? 'move' : 'copy');
+  }, [isReorganizeInPlace]);
 
   return (
     <>
@@ -155,7 +159,7 @@ export default function App() {
                 isReorganizeInPlace={isReorganizeInPlace}
                 duplicatePolicy={effectiveDuplicatePolicy}
                 onDuplicatePolicyChange={setDuplicatePolicy}
-                transferMode={effectiveTransferMode}
+                transferMode={transferMode}
                 onTransferModeChange={setTransferMode}
               />
             </div>
