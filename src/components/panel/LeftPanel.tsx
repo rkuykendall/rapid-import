@@ -114,20 +114,18 @@ export default function LeftPanel({
                 Folder template
               </Text>
               <Input value={folderTemplate} onChange={(e) => onFolderTemplateChange(e.target.value)} />
-              <div className="flex items-center justify-between gap-2">
-                <Text variant={TextVariants.small}>
-                  Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
-                </Text>
-                <button
-                  type="button"
-                  onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
-                  aria-label="Open chrono strftime format reference in browser"
-                  className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors shrink-0"
-                >
-                  chrono format reference
-                  <ExternalLink size={12} />
-                </button>
-              </div>
+              <Text variant={TextVariants.small}>
+                Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
+              </Text>
+              <button
+                type="button"
+                onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
+                aria-label="Open chrono strftime format reference in browser"
+                className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors w-fit"
+              >
+                chrono format reference
+                <ExternalLink size={12} />
+              </button>
             </div>
           </>
         )}
