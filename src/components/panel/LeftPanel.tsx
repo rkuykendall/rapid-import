@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { open } from '@tauri-apps/plugin-shell';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { ExternalLink } from 'lucide-react';
 import Input from '../ui/Input';
 import Text from '../ui/Text';
@@ -119,7 +119,7 @@ export default function LeftPanel({
               </Text>
               <button
                 type="button"
-                onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
+                onClick={() => openUrl(CHRONO_STRFTIME_DOCS_URL)}
                 aria-label="Open chrono strftime format reference in browser"
                 className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors w-fit"
               >

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { openPath } from '@tauri-apps/plugin-opener';
 import clsx from 'clsx';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import Text from '../ui/Text';
@@ -191,11 +192,15 @@ export default function PlanTable({ plan, sourceRoot, destinationRoot }: PlanTab
                     const chosen = item.candidates[0];
                     return (
                       <tr key={item.source_path} className="hover:bg-card-active/50 transition-colors">
-                        <td
-                          className="px-4 py-2 border-b border-border-color max-w-xs truncate"
-                          data-tooltip={item.source_path}
-                        >
-                          {relativeTo(item.source_path, sourceRoot)}
+                        <td className="px-4 py-2 border-b border-border-color max-w-xs">
+                          <button
+                            type="button"
+                            onClick={() => openPath(item.source_path).catch(console.error)}
+                            data-tooltip={`Open ${item.source_path}`}
+                            className="truncate hover:text-accent hover:underline transition-colors text-left w-full"
+                          >
+                            {relativeTo(item.source_path, sourceRoot)}
+                          </button>
                         </td>
                         <td
                           className="px-4 py-2 border-b border-border-color max-w-xs truncate text-text-secondary"
