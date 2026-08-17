@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { openPath } from '@tauri-apps/plugin-opener';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import clsx from 'clsx';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import Text from '../ui/Text';
@@ -195,8 +195,8 @@ export default function PlanTable({ plan, sourceRoot, destinationRoot }: PlanTab
                         <td className="px-4 py-2 border-b border-border-color max-w-xs">
                           <button
                             type="button"
-                            onClick={() => openPath(item.source_path).catch(console.error)}
-                            data-tooltip={`Open ${item.source_path}`}
+                            onClick={() => revealItemInDir(item.source_path).catch(console.error)}
+                            data-tooltip={`Show ${item.source_path} in folder`}
                             className="truncate hover:text-accent hover:underline transition-colors text-left w-full"
                           >
                             {relativeTo(item.source_path, sourceRoot)}

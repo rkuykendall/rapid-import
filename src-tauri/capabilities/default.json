@@ -13,10 +13,7 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-set-fullscreen",
     "os:allow-os-type",
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "**" }]
-    },
+    "opener:allow-reveal-item-in-dir",
     "opener:allow-open-url"
   ]
 }
