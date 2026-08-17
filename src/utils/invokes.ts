@@ -6,4 +6,5 @@ export enum Invokes {
   PreviewFolderTemplate = 'preview_folder_template',
   LoadProfileForDestination = 'load_profile_for_destination',
   SaveProfileForDestination = 'save_profile_for_destination',
+  ListProfiles = 'list_profiles',
 }

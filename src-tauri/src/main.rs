@@ -11,12 +11,24 @@ use tauri::{Emitter, Manager};
 const SCAN_PROGRESS_EVERY: usize = 10;
 
 /// Profiles are keyed by destination path — pick a destination (library),
-/// recall the source/template last used for *that* destination. `name` and
+/// recall the source/template last used for *that* destination.
 /// `date_fallback_order`/`conflict_policy` aren't exposed in the UI yet, so
-/// sensible defaults are hardcoded here rather than left for the user to
+/// a sensible default is hardcoded here rather than left for the user to
 /// configure.
-const DEFAULT_PROFILE_NAME: &str = "Default";
 const DEFAULT_DATE_FALLBACK_ORDER: [&str; 4] = ["exif", "filename", "xmp", "mtime"];
+
+/// A profile's display name is just its destination's last path
+/// component (e.g. `/Users/x/Pictures` -> `"Pictures"`) — the sidebar
+/// needs something recognizable at a glance, not a user-chosen name (no
+/// UI for that yet).
+fn profile_name_for(destination_root: &str) -> String {
+    Path::new(destination_root)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(destination_root)
+        .to_string()
+}
 
 struct AppState {
     db: Mutex<rusqlite::Connection>,
@@ -100,7 +112,7 @@ async fn save_profile_for_destination(
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         let existing = profiles::find_profile_by_destination_root(&conn, &destination_root).map_err(|e| e.to_string())?;
         let new_profile = profiles::NewProfile {
-            name: DEFAULT_PROFILE_NAME.to_string(),
+            name: profile_name_for(&destination_root),
             folder_template,
             source_root: Some(source_root),
             destination_root: Some(destination_root),
@@ -112,6 +124,20 @@ async fn save_profile_for_destination(
             None => profiles::save_profile(&conn, &new_profile).map(|_| ()),
         }
         .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Lists every saved profile (one per destination ever used) for the
+/// sidebar — newest-created last, since `profiles::load_profiles` orders
+/// by `id`.
+#[tauri::command]
+async fn list_profiles(app_handle: tauri::AppHandle) -> Result<Vec<profiles::Profile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        profiles::load_profiles(&conn).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -133,7 +159,8 @@ fn main() {
             scan_source,
             preview_folder_template,
             load_profile_for_destination,
-            save_profile_for_destination
+            save_profile_for_destination,
+            list_profiles
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,10 +6,13 @@ import Button from './components/ui/Button';
 import Input from './components/ui/Input';
 import Text from './components/ui/Text';
 import FolderPicker from './components/FolderPicker';
-import PlanItemRow from './components/PlanItemRow';
+import SourcesPanel from './components/panel/SourcesPanel';
+import PlanTable from './components/panel/PlanTable';
+import SummaryPanel from './components/panel/SummaryPanel';
 import { useScan } from './hooks/useScan';
 import { useFolderTemplatePreview } from './hooks/useFolderTemplatePreview';
 import { useDestinationProfile } from './hooks/useDestinationProfile';
+import { useProfiles } from './hooks/useProfiles';
 import { DEFAULT_THEME_ID, THEMES } from './utils/themes';
 import { TextVariants } from './types/typography';
 
@@ -34,7 +37,9 @@ export default function App() {
 
   // Destination is picked first, RapidRAW-style — everything else (source,
   // template) is recalled per-destination once it's set, via
-  // useDestinationProfile.
+  // useDestinationProfile. The Sources sidebar lists every destination
+  // ever used (via useProfiles) so switching between libraries is a click,
+  // not retyping a path.
   const [destinationRoot, setDestinationRoot] = useState('');
   const [reorganizeInPlace, setReorganizeInPlace] = useState(false);
   const { sourceRoot, setSourceRoot, folderTemplate, setFolderTemplate, save } = useDestinationProfile(
@@ -43,6 +48,7 @@ export default function App() {
   );
   const { plan, loading, error, scannedCount, scan } = useScan();
   const templatePreview = useFolderTemplatePreview(folderTemplate);
+  const { profiles, refresh: refreshProfiles } = useProfiles();
 
   const hasDestination = destinationRoot.trim() !== '';
   // "Same as destination" means reorganizing an existing library in place —
@@ -51,94 +57,93 @@ export default function App() {
   const effectiveSourceRoot = reorganizeInPlace ? destinationRoot : sourceRoot;
   const canScan = hasDestination && effectiveSourceRoot.trim() !== '' && folderTemplate.trim() !== '';
 
-  const handleScan = () => {
-    save(effectiveSourceRoot);
+  const handleScan = async () => {
+    await save(effectiveSourceRoot);
+    refreshProfiles();
     scan(effectiveSourceRoot, destinationRoot, folderTemplate);
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-bg-primary">
+    <div className="h-screen w-screen flex flex-col bg-bg-primary overflow-hidden">
       <TitleBar />
-      <div className="flex-1 overflow-y-auto pt-10">
-        <div className="max-w-3xl mx-auto p-6 flex flex-col gap-6">
-          <Text variant={TextVariants.headline}>RapidImport</Text>
+      <div className="flex-1 flex flex-col min-h-0 pt-10 p-2 gap-2">
+        <div className="flex flex-row flex-grow h-full min-h-0 gap-2">
+          <div className="w-64 flex-shrink-0 bg-bg-secondary rounded-lg overflow-hidden">
+            <SourcesPanel profiles={profiles} activeDestinationRoot={destinationRoot} onSelect={setDestinationRoot} />
+          </div>
 
-          <div className="bg-surface rounded-lg p-4 flex flex-col gap-4">
-            <FolderPicker label="Destination folder" value={destinationRoot} onChange={setDestinationRoot} />
-
-            {!hasDestination && (
-              <Text variant={TextVariants.body}>Pick a destination folder to continue.</Text>
-            )}
-
-            {hasDestination && (
+          <div className="flex-1 flex flex-col min-w-0 bg-bg-secondary rounded-lg overflow-hidden">
+            {!hasDestination ? (
+              <div className="flex-1 flex items-center justify-center">
+                <Text variant={TextVariants.body}>
+                  Select or add a destination on the left to get started.
+                </Text>
+              </div>
+            ) : (
               <>
-                <div className="flex flex-col gap-1">
-                  <FolderPicker
-                    label="Source folder"
-                    value={effectiveSourceRoot}
-                    onChange={setSourceRoot}
-                    disabled={reorganizeInPlace}
-                  />
-                  <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer w-fit">
-                    <input
-                      type="checkbox"
-                      checked={reorganizeInPlace}
-                      onChange={(e) => setReorganizeInPlace(e.target.checked)}
+                <div className="p-4 border-b border-border-color flex-shrink-0 flex flex-col gap-3">
+                  <Text variant={TextVariants.heading} className="truncate" title={destinationRoot}>
+                    {destinationRoot}
+                  </Text>
+
+                  <div className="flex flex-col gap-1">
+                    <FolderPicker
+                      label="Source folder"
+                      value={effectiveSourceRoot}
+                      onChange={setSourceRoot}
+                      disabled={reorganizeInPlace}
                     />
-                    Same as destination (reorganize)
-                  </label>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <Text variant={TextVariants.label}>Folder template</Text>
-                  <Input value={folderTemplate} onChange={(e) => setFolderTemplate(e.target.value)} />
-                  <div className="flex items-center justify-between gap-2">
-                    <Text variant={TextVariants.small}>
-                      Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
-                    </Text>
-                    <button
-                      type="button"
-                      onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
-                      aria-label="Open chrono strftime format reference in browser"
-                      className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors shrink-0"
-                    >
-                      chrono format reference
-                      <ExternalLink size={12} />
-                    </button>
+                    <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer w-fit">
+                      <input
+                        type="checkbox"
+                        checked={reorganizeInPlace}
+                        onChange={(e) => setReorganizeInPlace(e.target.checked)}
+                      />
+                      Same as destination (reorganize)
+                    </label>
                   </div>
+
+                  <div className="flex flex-col gap-1">
+                    <Text variant={TextVariants.label}>Folder template</Text>
+                    <Input value={folderTemplate} onChange={(e) => setFolderTemplate(e.target.value)} />
+                    <div className="flex items-center justify-between gap-2">
+                      <Text variant={TextVariants.small}>
+                        Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
+                      </Text>
+                      <button
+                        type="button"
+                        onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
+                        aria-label="Open chrono strftime format reference in browser"
+                        className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors shrink-0"
+                      >
+                        chrono format reference
+                        <ExternalLink size={12} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <Button onClick={handleScan} disabled={!canScan || loading} className="self-start">
+                    {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    {loading
+                      ? `Scanning… ${scannedCount} file${scannedCount === 1 ? '' : 's'} so far`
+                      : 'Scan (dry run)'}
+                  </Button>
+
+                  {error && (
+                    <Text variant={TextVariants.body} color="error">
+                      {error}
+                    </Text>
+                  )}
                 </div>
-                <Button onClick={handleScan} disabled={!canScan || loading} className="self-start">
-                  {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-                  {loading
-                    ? `Scanning… ${scannedCount} file${scannedCount === 1 ? '' : 's'} so far`
-                    : 'Scan (dry run)'}
-                </Button>
+
+                <PlanTable plan={plan} />
               </>
             )}
           </div>
 
-          {error && (
-            <Text variant={TextVariants.body} color="error">
-              {error}
-            </Text>
-          )}
-
-          {plan && (
-            <div className="bg-surface rounded-lg p-4">
-              <Text variant={TextVariants.heading} className="mb-2">
-                {plan.items.length} file{plan.items.length === 1 ? '' : 's'} scanned. Nothing has been written — this
-                is a dry-run preview only.
-              </Text>
-              {plan.items.length === 0 ? (
-                <Text variant={TextVariants.body}>No files found.</Text>
-              ) : (
-                <div>
-                  {plan.items.map((item) => (
-                    <PlanItemRow key={item.source_path} item={item} />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="w-80 flex-shrink-0 bg-bg-secondary rounded-lg overflow-hidden">
+            <SummaryPanel plan={plan} />
+          </div>
         </div>
       </div>
     </div>
