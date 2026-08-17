@@ -11,6 +11,7 @@ use walkdir::WalkDir;
 use crate::date_resolution::{self, DateInputs};
 use crate::db;
 use crate::dedup;
+use crate::formats::is_supported_media_file;
 use crate::plan::{render_template, ConflictKind, Plan, PlanItem, NEEDS_REVIEW_THRESHOLD};
 use crate::sidecar_interop;
 
@@ -43,6 +44,7 @@ pub fn scan_with_progress(options: &ScanOptions, mut on_item: impl FnMut(usize))
         .into_iter()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| is_supported_media_file(entry.path()))
     {
         items.push(build_plan_item(entry.path(), options));
         on_item(items.len());

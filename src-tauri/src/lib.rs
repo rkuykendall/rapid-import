@@ -3,6 +3,7 @@ pub mod date_resolution;
 pub mod db;
 pub mod dedup;
 pub mod filename_patterns;
+pub mod formats;
 pub mod plan;
 pub mod profiles;
 pub mod scan;
