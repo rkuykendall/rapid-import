@@ -5,7 +5,7 @@ import Resizer, { Orientation } from './components/ui/Resizer';
 import GlobalTooltip from './components/ui/GlobalTooltip';
 import LeftPanel from './components/panel/LeftPanel';
 import PlanTable from './components/panel/PlanTable';
-import SummaryPanel, { DuplicatePolicy } from './components/panel/SummaryPanel';
+import SummaryPanel, { DuplicatePolicy, TransferMode } from './components/panel/SummaryPanel';
 import { useScan } from './hooks/useScan';
 import { useFolderTemplatePreview } from './hooks/useFolderTemplatePreview';
 import { useDestinationProfile } from './hooks/useDestinationProfile';
@@ -51,6 +51,11 @@ export default function App() {
   // out and back in, but "duplicates_folder" only ever applies while
   // actually reorganizing — see `effectiveDuplicatePolicy` below.
   const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>('skip');
+  // Same story: inert until `commit_plan` is wired up. Defaults to copy —
+  // the standard for a plain import (never touch the source device beyond
+  // reading it) — but reorganizing in place must always be a move; see
+  // `effectiveTransferMode` below.
+  const [transferMode, setTransferMode] = useState<TransferMode>('copy');
   const leftPanel = useResizablePanel(320, 'left');
   const rightPanel = useResizablePanel(320, 'right');
 
@@ -65,6 +70,10 @@ export default function App() {
   // existing library — for a plain import, skip (leaving the source
   // device/card untouched) is already the standard, correct behavior.
   const effectiveDuplicatePolicy: DuplicatePolicy = isReorganizeInPlace ? duplicatePolicy : 'skip';
+  // Copying onto the same tree you're reorganizing would just leave a
+  // duplicate at both the old and new location — reorganize-in-place must
+  // always be a move, regardless of what's stored above.
+  const effectiveTransferMode: TransferMode = isReorganizeInPlace ? 'move' : transferMode;
   const canScan = hasDestination && sourceRoot.trim() !== '' && folderTemplate.trim() !== '';
   // Whether the displayed plan (if any) was actually scanned for exactly
   // today's inputs — governs the action button's "Scan" vs "Import" label
@@ -146,6 +155,8 @@ export default function App() {
                 isReorganizeInPlace={isReorganizeInPlace}
                 duplicatePolicy={effectiveDuplicatePolicy}
                 onDuplicatePolicyChange={setDuplicatePolicy}
+                transferMode={effectiveTransferMode}
+                onTransferModeChange={setTransferMode}
               />
             </div>
           </div>

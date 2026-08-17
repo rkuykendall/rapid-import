@@ -12,6 +12,13 @@ const DUPLICATE_POLICY_OPTIONS: Array<{ value: DuplicatePolicy; label: string }>
   { value: 'duplicates_folder', label: 'Move to Duplicates folder' },
 ];
 
+export type TransferMode = 'copy' | 'move';
+
+const TRANSFER_MODE_OPTIONS: Array<{ value: TransferMode; label: string }> = [
+  { value: 'copy', label: 'Copy (leave source untouched)' },
+  { value: 'move', label: 'Move (remove from source)' },
+];
+
 interface StatRowProps {
   label: string;
   value: number;
@@ -51,6 +58,8 @@ interface SummaryPanelProps {
   isReorganizeInPlace: boolean;
   duplicatePolicy: DuplicatePolicy;
   onDuplicatePolicyChange(value: DuplicatePolicy): void;
+  transferMode: TransferMode;
+  onTransferModeChange(value: TransferMode): void;
 }
 
 export default function SummaryPanel({
@@ -64,6 +73,8 @@ export default function SummaryPanel({
   isReorganizeInPlace,
   duplicatePolicy,
   onDuplicatePolicyChange,
+  transferMode,
+  onTransferModeChange,
 }: SummaryPanelProps) {
   const stats = plan ? summarize(plan) : null;
 
@@ -85,6 +96,17 @@ export default function SummaryPanel({
             <StatRow label="Needs review" value={stats.needsReview} />
             <StatRow label="Conflicts" value={stats.conflicts} />
           </div>
+        )}
+      </div>
+
+      <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-1.5">
+        <Text variant={TextVariants.small} className="uppercase tracking-wide">
+          Transfer
+        </Text>
+        {isReorganizeInPlace ? (
+          <Text variant={TextVariants.body}>Move — reorganizing files within the same library.</Text>
+        ) : (
+          <Dropdown value={transferMode} onChange={onTransferModeChange} options={TRANSFER_MODE_OPTIONS} />
         )}
       </div>
 

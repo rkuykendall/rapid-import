@@ -17,6 +17,13 @@ use crate::profiles::ConflictPolicy;
 pub struct UndoMove {
     pub from: String,
     pub to: String,
+    /// Whether this entry was a copy (source left in place) rather than a
+    /// move (source relocated). Reversal differs by kind: undoing a move
+    /// moves `to` back to `from`; undoing a copy just deletes `to` — `from`
+    /// was never touched, so there's nothing to move back onto it (doing
+    /// so would overwrite whatever's still sitting there).
+    #[serde(default)]
+    pub was_copy: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,9 +45,26 @@ pub enum DuplicatePolicy {
     MoveToDuplicatesFolder,
 }
 
+/// Whether a plan's primary transfer (source → computed destination)
+/// deletes the source or leaves it in place. Only meaningful when source
+/// and destination roots actually differ — reorganizing a library in place
+/// must always be `Move` (a "copy" onto the same tree would just leave a
+/// duplicate sitting at both the old and new location); the caller is
+/// responsible for forcing `Move` in that case, same as it already does
+/// for `DuplicatePolicy`. Never applies to a duplicate's relocation into
+/// `Duplicates/` (`relocate_duplicate` always physically moves) — that
+/// path only ever runs during a forced-`Move` reorganize anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferMode {
+    Move,
+    Copy,
+}
+
 #[derive(Debug, Default)]
 pub struct CommitSummary {
     pub batch_id: i64,
+    /// Successfully transferred to their computed destination — moved or
+    /// copied, depending on `TransferMode`.
     pub moved: usize,
     /// Reorganize-in-place items that were already at their correct
     /// destination — nothing to move.
@@ -73,6 +97,7 @@ pub struct CommitOptions<'a> {
     pub profile_id: Option<i64>,
     pub conflict_policy: ConflictPolicy,
     pub duplicate_policy: DuplicatePolicy,
+    pub transfer_mode: TransferMode,
 }
 
 /// Executes a dry-run `Plan` against disk — the only place in the app that
@@ -129,14 +154,20 @@ pub fn undo_batch(conn: &Connection, batch_id: i64) -> Result<usize> {
     let mut restored = 0;
     for mv in manifest.moves.iter().rev() {
         let from = PathBuf::from(&mv.to);
-        let to = PathBuf::from(&mv.from);
         if !from.exists() {
             continue;
         }
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent)?;
+        if mv.was_copy {
+            // The original source was never touched — undoing a copy
+            // means deleting the copy, not moving anything back onto it.
+            fs::remove_file(&from)?;
+        } else {
+            let to = PathBuf::from(&mv.from);
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            move_file(&from, &to)?;
         }
-        move_file(&from, &to)?;
         restored += 1;
     }
 
@@ -270,8 +301,13 @@ fn commit_item(
     }
 
     fs::create_dir_all(target_folder)?;
-    move_file(&item.source_path, &destination)?;
-    record_move(options.conn, batch_id, item, &destination, source_hash, undo_moves)?;
+    let was_copy = options.transfer_mode == TransferMode::Copy;
+    if was_copy {
+        fs::copy(&item.source_path, &destination).context("copying file to destination")?;
+    } else {
+        move_file(&item.source_path, &destination)?;
+    }
+    record_move(options.conn, batch_id, item, &destination, source_hash, was_copy, undo_moves)?;
     summary.moved += 1;
 
     Ok(())
@@ -307,7 +343,7 @@ fn relocate_duplicate(
 
     fs::create_dir_all(&duplicates_folder)?;
     move_file(&item.source_path, &destination)?;
-    record_move(options.conn, batch_id, item, &destination, source_hash, undo_moves)
+    record_move(options.conn, batch_id, item, &destination, source_hash, false, undo_moves)
 }
 
 fn record_move(
@@ -316,6 +352,7 @@ fn record_move(
     item: &PlanItem,
     destination: &Path,
     source_hash: Option<String>,
+    was_copy: bool,
     undo_moves: &mut Vec<UndoMove>,
 ) -> Result<()> {
     let chosen = item.chosen();
@@ -336,6 +373,7 @@ fn record_move(
     undo_moves.push(UndoMove {
         from: item.source_path.to_string_lossy().to_string(),
         to: destination.to_string_lossy().to_string(),
+        was_copy,
     });
 
     Ok(())
@@ -417,6 +455,7 @@ mod tests {
             profile_id: None,
             conflict_policy: ConflictPolicy::Skip,
             duplicate_policy: DuplicatePolicy::Skip,
+            transfer_mode: TransferMode::Move,
         }
     }
 
@@ -446,6 +485,64 @@ mod tests {
         let manifest: UndoManifest = serde_json::from_str(&fs::read_to_string(undo_log_path).unwrap()).unwrap();
         assert_eq!(manifest.moves.len(), 1);
         assert_eq!(manifest.moves[0].to, dest_path.to_string_lossy());
+        assert!(!manifest.moves[0].was_copy);
+    }
+
+    #[test]
+    fn transfer_mode_copy_leaves_the_source_file_in_place() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"fixture").unwrap();
+        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+
+        let plan = Plan {
+            items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
+        };
+
+        let mut opts = options(&conn, undo_dir.path(), destination.path());
+        opts.transfer_mode = TransferMode::Copy;
+        let summary = commit_plan(&plan, &opts).unwrap();
+
+        assert_eq!(summary.moved, 1);
+        assert!(src_path.exists(), "source is left in place under Copy");
+        assert!(dest_path.exists());
+        assert_eq!(fs::read(&src_path).unwrap(), fs::read(&dest_path).unwrap());
+
+        let undo_log_path = db::undo_log_path_for_batch(&conn, summary.batch_id).unwrap().unwrap();
+        let manifest: UndoManifest = serde_json::from_str(&fs::read_to_string(undo_log_path).unwrap()).unwrap();
+        assert!(manifest.moves[0].was_copy);
+    }
+
+    #[test]
+    fn undo_of_a_copy_deletes_the_copy_without_touching_the_source() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"fixture").unwrap();
+        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+
+        let plan = Plan {
+            items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
+        };
+
+        let mut opts = options(&conn, undo_dir.path(), destination.path());
+        opts.transfer_mode = TransferMode::Copy;
+        let summary = commit_plan(&plan, &opts).unwrap();
+        assert!(src_path.exists());
+        assert!(dest_path.exists());
+
+        let restored = undo_batch(&conn, summary.batch_id).unwrap();
+
+        assert_eq!(restored, 1);
+        assert!(src_path.exists(), "source was never touched by the copy, so undo leaves it alone");
+        assert!(!dest_path.exists(), "the copy is deleted, not moved back over the untouched source");
     }
 
     #[test]
