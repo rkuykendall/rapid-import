@@ -88,7 +88,6 @@ export default function App() {
                 activeDestinationRoot={destinationRoot}
                 onSelectDestination={setDestinationRoot}
                 hasDestination={hasDestination}
-                sourceRoot={sourceRoot}
                 onSourceRootChange={setSourceRoot}
                 reorganizeInPlace={reorganizeInPlace}
                 onReorganizeInPlaceChange={setReorganizeInPlace}
@@ -96,12 +95,6 @@ export default function App() {
                 folderTemplate={folderTemplate}
                 onFolderTemplateChange={setFolderTemplate}
                 templatePreview={templatePreview}
-                canScan={canScan}
-                isPlanCurrent={isPlanCurrent}
-                loading={loading}
-                scannedCount={scannedCount}
-                onScan={handleScan}
-                error={error}
               />
             </div>
 
@@ -123,7 +116,15 @@ export default function App() {
               className="flex-shrink-0 bg-bg-secondary rounded-lg overflow-hidden"
               style={{ width: rightPanel.width }}
             >
-              <SummaryPanel plan={plan} />
+              <SummaryPanel
+                plan={plan}
+                canScan={canScan}
+                isPlanCurrent={isPlanCurrent}
+                loading={loading}
+                scannedCount={scannedCount}
+                onScan={handleScan}
+                error={error}
+              />
             </div>
           </div>
         </div>

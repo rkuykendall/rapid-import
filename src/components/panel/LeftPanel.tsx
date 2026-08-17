@@ -1,22 +1,45 @@
+import { useMemo } from 'react';
 import { open } from '@tauri-apps/plugin-shell';
-import { ExternalLink, Import, Loader2, Search } from 'lucide-react';
-import Button from '../ui/Button';
+import { ExternalLink } from 'lucide-react';
 import Input from '../ui/Input';
 import Text from '../ui/Text';
 import Switch from '../ui/Switch';
-import FolderPicker from '../FolderPicker';
-import SourcesPanel from './SourcesPanel';
+import RecentFoldersList, { RecentFolderItem } from './RecentFoldersList';
 import { TextVariants } from '../../types/typography';
 import { Profile } from '../../types/profile';
 
 const CHRONO_STRFTIME_DOCS_URL = 'https://docs.rs/chrono/latest/chrono/format/strftime/index.html';
+
+function folderName(path: string): string {
+  return (
+    path
+      .split('/')
+      .filter((part) => part.length > 0)
+      .pop() ?? path
+  );
+}
+
+// Distinct, order-preserving folder paths pulled from a `Profile` field —
+// shared by both the Destinations and Source recents lists, since both are
+// just "every distinct root we've ever seen in `profiles`."
+function distinctFolders(profiles: Profile[], field: 'source_root' | 'destination_root'): RecentFolderItem[] {
+  const seen = new Set<string>();
+  const items: RecentFolderItem[] = [];
+  for (const profile of profiles) {
+    const path = profile[field];
+    if (path && !seen.has(path)) {
+      seen.add(path);
+      items.push({ key: path, path, name: folderName(path) });
+    }
+  }
+  return items;
+}
 
 interface LeftPanelProps {
   profiles: Profile[];
   activeDestinationRoot: string;
   onSelectDestination(destinationRoot: string): void;
   hasDestination: boolean;
-  sourceRoot: string;
   onSourceRootChange(value: string): void;
   reorganizeInPlace: boolean;
   onReorganizeInPlaceChange(value: boolean): void;
@@ -24,25 +47,20 @@ interface LeftPanelProps {
   folderTemplate: string;
   onFolderTemplateChange(value: string): void;
   templatePreview: string;
-  canScan: boolean;
-  isPlanCurrent: boolean;
-  loading: boolean;
-  scannedCount: number;
-  onScan(): void;
-  error: string | null;
 }
 
-// Owns the whole left column: the Destinations section (via `SourcesPanel`)
-// plus, once a destination is picked, the Source and Folder template
-// sections and a single pinned action button — "Scan" before a plan exists
-// for the current inputs, "Import" once one does (still a disabled stub;
-// wiring real commit execution is its own deferred task).
+// Owns the whole left column. Destinations and Source are the same
+// "+ Add" button + recents list pattern (via `RecentFoldersList`) — Source
+// recents are just the distinct `source_root` values already sitting in
+// `profiles`, no separate tracking needed. Every section stacks at its
+// natural height so they float to the top under Destinations. The
+// Scan/Import action button lives in the right column (`SummaryPanel`),
+// not here.
 export default function LeftPanel({
   profiles,
   activeDestinationRoot,
   onSelectDestination,
   hasDestination,
-  sourceRoot,
   onSourceRootChange,
   reorganizeInPlace,
   onReorganizeInPlaceChange,
@@ -50,35 +68,41 @@ export default function LeftPanel({
   folderTemplate,
   onFolderTemplateChange,
   templatePreview,
-  canScan,
-  isPlanCurrent,
-  loading,
-  scannedCount,
-  onScan,
-  error,
 }: LeftPanelProps) {
+  const destinationItems = useMemo(() => distinctFolders(profiles, 'destination_root'), [profiles]);
+  const sourceItems = useMemo(() => distinctFolders(profiles, 'source_root'), [profiles]);
+
   return (
-    <div className="flex flex-col h-full">
-      <SourcesPanel profiles={profiles} activeDestinationRoot={activeDestinationRoot} onSelect={onSelectDestination} />
+    <div className="h-full overflow-y-auto flex flex-col">
+      <RecentFoldersList
+        label="Destinations"
+        addLabel="Add destination"
+        emptyMessage="No destinations yet — add one to get started."
+        items={destinationItems}
+        activeValue={activeDestinationRoot}
+        onSelect={onSelectDestination}
+      />
 
       {hasDestination && (
         <>
-          <div className="border-t border-border-color p-3 flex-shrink-0 flex flex-col gap-1">
-            <Text variant={TextVariants.small} className="uppercase tracking-wide">
-              Source
-            </Text>
-            <FolderPicker
-              label="Source folder"
-              value={effectiveSourceRoot}
-              onChange={onSourceRootChange}
+          <div className="border-t border-border-color">
+            <RecentFoldersList
+              label="Source"
+              addLabel="Add source"
+              emptyMessage="No sources yet — add one to get started."
+              items={sourceItems}
+              activeValue={effectiveSourceRoot}
+              onSelect={onSourceRootChange}
               disabled={reorganizeInPlace}
             />
-            <Switch
-              label="Same as destination (reorganize)"
-              checked={reorganizeInPlace}
-              onChange={onReorganizeInPlaceChange}
-              className="w-fit gap-3"
-            />
+            <div className="px-3 pb-3">
+              <Switch
+                label="Same as destination (reorganize)"
+                checked={reorganizeInPlace}
+                onChange={onReorganizeInPlaceChange}
+                className="w-fit gap-3"
+              />
+            </div>
           </div>
 
           <div className="border-t border-border-color p-3 flex-shrink-0 flex flex-col gap-1">
@@ -103,26 +127,6 @@ export default function LeftPanel({
           </div>
         </>
       )}
-
-      <div className="border-t border-border-color p-3 flex-shrink-0 flex flex-col gap-2">
-        {isPlanCurrent ? (
-          <Button disabled className="w-full" data-tooltip="Coming soon">
-            <Import size={16} />
-            Import
-          </Button>
-        ) : (
-          <Button onClick={onScan} disabled={!canScan || loading} className="w-full">
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-            {loading ? `Scanning… ${scannedCount} file${scannedCount === 1 ? '' : 's'} so far` : 'Scan'}
-          </Button>
-        )}
-
-        {error && (
-          <Text variant={TextVariants.body} color="error">
-            {error}
-          </Text>
-        )}
-      </div>
     </div>
   );
 }

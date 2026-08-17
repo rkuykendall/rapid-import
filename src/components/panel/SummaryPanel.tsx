@@ -1,3 +1,5 @@
+import { Import, Loader2, Search } from 'lucide-react';
+import Button from '../ui/Button';
 import Text from '../ui/Text';
 import { TextVariants } from '../../types/typography';
 import { Plan } from '../../types/plan';
@@ -30,7 +32,25 @@ function summarize(plan: Plan) {
   };
 }
 
-export default function SummaryPanel({ plan }: { plan: Plan | null }) {
+interface SummaryPanelProps {
+  plan: Plan | null;
+  canScan: boolean;
+  isPlanCurrent: boolean;
+  loading: boolean;
+  scannedCount: number;
+  onScan(): void;
+  error: string | null;
+}
+
+export default function SummaryPanel({
+  plan,
+  canScan,
+  isPlanCurrent,
+  loading,
+  scannedCount,
+  onScan,
+  error,
+}: SummaryPanelProps) {
   const stats = plan ? summarize(plan) : null;
 
   return (
@@ -51,6 +71,26 @@ export default function SummaryPanel({ plan }: { plan: Plan | null }) {
             <StatRow label="Needs review" value={stats.needsReview} />
             <StatRow label="Conflicts" value={stats.conflicts} />
           </div>
+        )}
+      </div>
+
+      <div className="p-4 border-t border-border-color flex-shrink-0 flex flex-col gap-2">
+        {isPlanCurrent ? (
+          <Button disabled className="w-full" data-tooltip="Coming soon">
+            <Import size={16} />
+            Import
+          </Button>
+        ) : (
+          <Button onClick={onScan} disabled={!canScan || loading} className="w-full">
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+            {loading ? `Scanning… ${scannedCount} file${scannedCount === 1 ? '' : 's'} so far` : 'Scan'}
+          </Button>
+        )}
+
+        {error && (
+          <Text variant={TextVariants.body} color="error">
+            {error}
+          </Text>
         )}
       </div>
     </div>

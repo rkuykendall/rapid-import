@@ -3,65 +3,81 @@ import clsx from 'clsx';
 import { Folder, FolderPlus } from 'lucide-react';
 import Text from '../ui/Text';
 import { TextVariants } from '../../types/typography';
-import { Profile } from '../../types/profile';
 
-interface SourcesPanelProps {
-  profiles: Profile[];
-  activeDestinationRoot: string;
-  onSelect(destinationRoot: string): void;
+export interface RecentFolderItem {
+  key: string | number;
+  path: string;
+  name: string;
 }
 
-// Row styling mirrors RapidRAW's FolderTree `TreeNode` pattern (icon +
-// truncated label, bg-surface when selected, hover:bg-card-active
-// otherwise) — flattened, since profiles aren't a nested tree. The
-// uppercase "DESTINATIONS" label mirrors RapidRAW's own ALBUMS/FOLDERS
-// section-label convention. This is one section within `LeftPanel` (which
-// owns the outer column and the Source/Folder template sections below
-// it), so it flexes to fill whatever space `LeftPanel` gives it rather
-// than assuming the full column height itself.
-export default function SourcesPanel({ profiles, activeDestinationRoot, onSelect }: SourcesPanelProps) {
-  const handleAddDestination = async () => {
+interface RecentFoldersListProps {
+  label: string;
+  addLabel: string;
+  emptyMessage: string;
+  items: RecentFolderItem[];
+  activeValue: string;
+  onSelect(path: string): void;
+  disabled?: boolean;
+}
+
+// Shared by the Destinations and Source sections in `LeftPanel` — same
+// "+ Add" button, uppercase section label (mirrors RapidRAW's own
+// ALBUMS/FOLDERS convention), and row styling (RapidRAW's FolderTree
+// `TreeNode` pattern: icon + truncated label, bg-surface when active).
+// Capped height with internal scroll rather than stretching to fill the
+// column, so multiple sections can stack compactly at the top instead of
+// one section pushing the rest of the panel down.
+export default function RecentFoldersList({
+  label,
+  addLabel,
+  emptyMessage,
+  items,
+  activeValue,
+  onSelect,
+  disabled = false,
+}: RecentFoldersListProps) {
+  const handleAdd = async () => {
+    if (disabled) return;
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === 'string') {
       onSelect(selected);
     }
   };
 
-  const destinations = profiles.filter((p): p is Profile & { destination_root: string } => p.destination_root !== null);
-
   return (
-    <div className="flex-1 min-h-0 flex flex-col p-2 gap-1">
+    <div className={clsx('flex flex-col p-2 gap-1', disabled && 'opacity-50 pointer-events-none')}>
       <button
         type="button"
-        onClick={handleAddDestination}
+        onClick={handleAdd}
+        disabled={disabled}
         className="flex items-center gap-2 p-1.5 rounded-md text-text-secondary hover:bg-card-active hover:text-text-primary transition-colors"
       >
         <FolderPlus size={16} />
         <Text variant={TextVariants.label} className="select-none">
-          Add destination
+          {addLabel}
         </Text>
       </button>
 
       <div className="h-px bg-border-color my-1" />
 
       <Text variant={TextVariants.small} className="px-1.5 uppercase tracking-wide">
-        Destinations
+        {label}
       </Text>
 
-      <div className="flex-1 overflow-y-auto flex flex-col gap-0.5">
-        {destinations.length === 0 && (
+      <div className="max-h-52 overflow-y-auto flex flex-col gap-0.5">
+        {items.length === 0 && (
           <Text variant={TextVariants.small} className="px-1.5 py-1">
-            No destinations yet — add one to get started.
+            {emptyMessage}
           </Text>
         )}
-        {destinations.map((profile) => {
-          const isActive = profile.destination_root === activeDestinationRoot;
+        {items.map((item) => {
+          const isActive = item.path === activeValue;
           return (
             <button
-              key={profile.id}
+              key={item.key}
               type="button"
-              onClick={() => onSelect(profile.destination_root)}
-              data-tooltip={profile.destination_root}
+              onClick={() => onSelect(item.path)}
+              data-tooltip={item.path}
               className={clsx('flex items-center gap-2 p-1.5 rounded-md text-left transition-colors', {
                 'bg-surface': isActive,
                 'hover:bg-card-active': !isActive,
@@ -73,7 +89,7 @@ export default function SourcesPanel({ profiles, activeDestinationRoot, onSelect
                 color={isActive ? 'accent' : 'primary'}
                 className="truncate select-none flex-1"
               >
-                {profile.name}
+                {item.name}
               </Text>
             </button>
           );
