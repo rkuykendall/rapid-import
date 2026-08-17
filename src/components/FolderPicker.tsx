@@ -24,8 +24,18 @@ export default function FolderPicker({ label, value, onChange, disabled = false 
     <div className="flex flex-col gap-1">
       <Text variant={TextVariants.label}>{label}</Text>
       <div className="flex gap-2">
-        <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="/path/to/folder" disabled={disabled} />
-        <Button onClick={handleBrowse} className="bg-surface shrink-0" title={`Browse for ${label}`} disabled={disabled}>
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="/path/to/folder"
+          disabled={disabled}
+        />
+        <Button
+          onClick={handleBrowse}
+          className="bg-surface shrink-0"
+          title={`Browse for ${label}`}
+          disabled={disabled}
+        >
           <FolderOpen size={16} />
         </Button>
       </div>

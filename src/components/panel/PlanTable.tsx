@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import Text from '../ui/Text';
+import Dropdown from '../ui/Dropdown';
 import { TextVariants } from '../../types/typography';
 import { Plan, PlanItem } from '../../types/plan';
 
@@ -13,7 +14,11 @@ function Badge({ children, tone }: { children: string; tone: 'info' | 'warning' 
     success: 'bg-green-400/10 text-green-400',
   }[tone];
 
-  return <span className={clsx('px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap', toneClasses)}>{children}</span>;
+  return (
+    <span className={clsx('px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap', toneClasses)}>
+      {children}
+    </span>
+  );
 }
 
 function filename(path: string): string {
@@ -130,17 +135,12 @@ export default function PlanTable({ plan }: { plan: Plan | null }) {
           {plan.items.length} file{plan.items.length === 1 ? '' : 's'} scanned. Nothing has been written — this is a
           dry-run preview only.
         </Text>
-        <select
+        <Dropdown
+          className="w-48 shrink-0"
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-          className="bg-bg-primary border border-border-color rounded-md text-sm px-2 py-1 text-text-primary"
-        >
-          {STATUS_FILTER_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+          onChange={(value) => setStatusFilter(value)}
+          options={STATUS_FILTER_OPTIONS}
+        />
       </div>
 
       {rows.length === 0 ? (
@@ -160,8 +160,7 @@ export default function PlanTable({ plan }: { plan: Plan | null }) {
                       className="flex items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
                     >
                       {col.label}
-                      {sortKey === col.key &&
-                        (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
+                      {sortKey === col.key && (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
                     </button>
                   </th>
                 ))}
@@ -175,7 +174,10 @@ export default function PlanTable({ plan }: { plan: Plan | null }) {
                 const chosen = item.candidates[0];
                 return (
                   <tr key={item.source_path} className="hover:bg-card-active/50 transition-colors">
-                    <td className="px-4 py-2 border-b border-border-color max-w-xs truncate" title={item.source_path}>
+                    <td
+                      className="px-4 py-2 border-b border-border-color max-w-xs truncate"
+                      data-tooltip={item.source_path}
+                    >
                       {filename(item.source_path)}
                     </td>
                     <td className="px-4 py-2 border-b border-border-color whitespace-nowrap text-text-secondary">
@@ -186,7 +188,7 @@ export default function PlanTable({ plan }: { plan: Plan | null }) {
                     </td>
                     <td
                       className="px-4 py-2 border-b border-border-color max-w-sm truncate text-text-secondary"
-                      title={item.destination_path ?? undefined}
+                      data-tooltip={item.destination_path ?? undefined}
                     >
                       {item.destination_path ?? '(unresolved)'}
                     </td>

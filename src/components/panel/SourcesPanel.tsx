@@ -52,7 +52,7 @@ export default function SourcesPanel({ profiles, activeDestinationRoot, onSelect
               key={profile.id}
               type="button"
               onClick={() => onSelect(profile.destination_root)}
-              title={profile.destination_root}
+              data-tooltip={profile.destination_root}
               className={clsx('flex items-center gap-2 p-1.5 rounded-md text-left transition-colors', {
                 'bg-surface': isActive,
                 'hover:bg-card-active': !isActive,

@@ -1,14 +1,56 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+@source not "../src-tauri";
+
+@theme {
+  --color-bg-primary: var(--app-bg-primary);
+  --color-bg-secondary: var(--app-bg-secondary);
+  --color-surface: var(--app-surface);
+  --color-card-active: var(--app-card-active);
+  --color-button-text: var(--app-button-text);
+  --color-text-primary: var(--app-text-primary);
+  --color-text-secondary: var(--app-text-secondary);
+  --color-accent: var(--app-accent);
+  --color-border-color: var(--app-border-color);
+  --color-hover-color: var(--app-hover-color);
+
+  --font-sans: var(--font-family);
+
+  --shadow-shiny: 0 0 24px rgba(255, 255, 255, 0.12);
+
+  --radius-md: 8px;
+  --radius-lg: 15px;
+}
 
 @layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+
+  :where(button, [role='button']):not([disabled]) {
+    cursor: pointer;
+  }
+
   html {
     background-color: transparent;
   }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   body {
-    background-color: rgba(27, 27, 27, 0.5);
+    background-color: transparent;
     @apply text-text-primary font-sans;
+  }
+
+  *:focus {
+    outline: none !important;
   }
 
   .enable-color-transitions *,
@@ -21,12 +63,13 @@
 
   ::-webkit-scrollbar {
     width: 10px;
+    height: 10px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background-color: theme('colors.text-secondary');
+    background-color: var(--color-text-secondary);
     border-radius: 10px;
     border: 2px solid transparent;
     background-clip: padding-box;
@@ -36,8 +79,6 @@
   }
 }
 
-@layer utilities {
-  .text-shadow-shiny {
-    text-shadow: 0 0 18px rgba(255, 255, 255, 0.35);
-  }
+@utility text-shadow-shiny {
+  text-shadow: 0 0 18px rgba(255, 255, 255, 0.35);
 }
