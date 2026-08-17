@@ -38,7 +38,6 @@ export default function App() {
   // ever used (via useProfiles) so switching between libraries is a click,
   // not retyping a path.
   const [destinationRoot, setDestinationRoot] = useState('');
-  const [reorganizeInPlace, setReorganizeInPlace] = useState(false);
   const { sourceRoot, setSourceRoot, folderTemplate, setFolderTemplate, save } = useDestinationProfile(
     destinationRoot,
     DEFAULT_FOLDER_TEMPLATE,
@@ -50,25 +49,27 @@ export default function App() {
   const rightPanel = useResizablePanel(320, 'right');
 
   const hasDestination = destinationRoot.trim() !== '';
-  // "Same as destination" means reorganizing an existing library in place —
-  // the source and destination roots are the same tree; see scan.rs's
-  // no-op/legal-subfolder handling for what that actually does on disk.
-  const effectiveSourceRoot = reorganizeInPlace ? destinationRoot : sourceRoot;
-  const canScan = hasDestination && effectiveSourceRoot.trim() !== '' && folderTemplate.trim() !== '';
+  // "Same as destination" is derived, not a separate mode to manage — it's
+  // just true whenever the chosen source happens to equal the destination.
+  // scan.rs's no-op/legal-subfolder handling already does the right thing
+  // based on the paths alone, so there was never a real distinct "reorganize
+  // mode" to track; the checkbox is purely a reflection of that fact.
+  const isReorganizeInPlace = hasDestination && sourceRoot === destinationRoot;
+  const canScan = hasDestination && sourceRoot.trim() !== '' && folderTemplate.trim() !== '';
   // Whether the displayed plan (if any) was actually scanned for exactly
   // today's inputs — governs the action button's "Scan" vs "Import" label
   // without needing to imperatively clear `plan` on every input change.
   const isPlanCurrent =
     plan !== null &&
     scannedFor !== null &&
-    scannedFor.sourceRoot === effectiveSourceRoot &&
+    scannedFor.sourceRoot === sourceRoot &&
     scannedFor.destinationRoot === destinationRoot &&
     scannedFor.folderTemplate === folderTemplate;
 
   const handleScan = async () => {
-    await save(effectiveSourceRoot);
+    await save(sourceRoot);
     refreshProfiles();
-    scan(effectiveSourceRoot, destinationRoot, folderTemplate);
+    scan(sourceRoot, destinationRoot, folderTemplate);
   };
 
   return (
@@ -88,10 +89,9 @@ export default function App() {
                 activeDestinationRoot={destinationRoot}
                 onSelectDestination={setDestinationRoot}
                 hasDestination={hasDestination}
+                sourceRoot={sourceRoot}
                 onSourceRootChange={setSourceRoot}
-                reorganizeInPlace={reorganizeInPlace}
-                onReorganizeInPlaceChange={setReorganizeInPlace}
-                effectiveSourceRoot={effectiveSourceRoot}
+                isReorganizeInPlace={isReorganizeInPlace}
                 folderTemplate={folderTemplate}
                 onFolderTemplateChange={setFolderTemplate}
                 templatePreview={templatePreview}

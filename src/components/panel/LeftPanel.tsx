@@ -40,10 +40,9 @@ interface LeftPanelProps {
   activeDestinationRoot: string;
   onSelectDestination(destinationRoot: string): void;
   hasDestination: boolean;
+  sourceRoot: string;
   onSourceRootChange(value: string): void;
-  reorganizeInPlace: boolean;
-  onReorganizeInPlaceChange(value: boolean): void;
-  effectiveSourceRoot: string;
+  isReorganizeInPlace: boolean;
   folderTemplate: string;
   onFolderTemplateChange(value: string): void;
   templatePreview: string;
@@ -61,10 +60,9 @@ export default function LeftPanel({
   activeDestinationRoot,
   onSelectDestination,
   hasDestination,
+  sourceRoot,
   onSourceRootChange,
-  reorganizeInPlace,
-  onReorganizeInPlaceChange,
-  effectiveSourceRoot,
+  isReorganizeInPlace,
   folderTemplate,
   onFolderTemplateChange,
   templatePreview,
@@ -96,16 +94,17 @@ export default function LeftPanel({
                 addLabel="Add source"
                 emptyMessage="No sources yet — add one to get started."
                 items={sourceItems}
-                activeValue={effectiveSourceRoot}
+                activeValue={sourceRoot}
                 onSelect={onSourceRootChange}
-                disabled={reorganizeInPlace}
               />
               <div className="px-3 pb-3">
                 <Switch
                   label="Same as destination (reorganize)"
-                  checked={reorganizeInPlace}
-                  onChange={onReorganizeInPlaceChange}
+                  checked={isReorganizeInPlace}
+                  onChange={() => {}}
+                  disabled
                   className="w-fit gap-3"
+                  tooltip="Reflects whether the chosen source matches the destination — pick a source folder that matches to reorganize in place."
                 />
               </div>
             </div>
