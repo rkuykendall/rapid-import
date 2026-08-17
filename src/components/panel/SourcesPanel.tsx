@@ -13,7 +13,12 @@ interface SourcesPanelProps {
 
 // Row styling mirrors RapidRAW's FolderTree `TreeNode` pattern (icon +
 // truncated label, bg-surface when selected, hover:bg-card-active
-// otherwise) — flattened, since profiles aren't a nested tree.
+// otherwise) — flattened, since profiles aren't a nested tree. The
+// uppercase "DESTINATIONS" label mirrors RapidRAW's own ALBUMS/FOLDERS
+// section-label convention. This is one section within `LeftPanel` (which
+// owns the outer column and the Source/Folder template sections below
+// it), so it flexes to fill whatever space `LeftPanel` gives it rather
+// than assuming the full column height itself.
 export default function SourcesPanel({ profiles, activeDestinationRoot, onSelect }: SourcesPanelProps) {
   const handleAddDestination = async () => {
     const selected = await open({ directory: true, multiple: false });
@@ -25,7 +30,7 @@ export default function SourcesPanel({ profiles, activeDestinationRoot, onSelect
   const destinations = profiles.filter((p): p is Profile & { destination_root: string } => p.destination_root !== null);
 
   return (
-    <div className="flex flex-col h-full p-2 gap-1">
+    <div className="flex-1 min-h-0 flex flex-col p-2 gap-1">
       <button
         type="button"
         onClick={handleAddDestination}
@@ -38,6 +43,10 @@ export default function SourcesPanel({ profiles, activeDestinationRoot, onSelect
       </button>
 
       <div className="h-px bg-border-color my-1" />
+
+      <Text variant={TextVariants.small} className="px-1.5 uppercase tracking-wide">
+        Destinations
+      </Text>
 
       <div className="flex-1 overflow-y-auto flex flex-col gap-0.5">
         {destinations.length === 0 && (

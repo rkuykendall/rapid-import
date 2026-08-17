@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
 const MIN_PANEL_WIDTH = 200;
-const MAX_PANEL_WIDTH = 480;
+const MAX_PANEL_WIDTH = 560;
 
 /**
  * Same drag mechanics as RapidRAW's `createResizeHandler` in App.tsx

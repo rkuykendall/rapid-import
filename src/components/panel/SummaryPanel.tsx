@@ -1,4 +1,3 @@
-import Button from '../ui/Button';
 import Text from '../ui/Text';
 import { TextVariants } from '../../types/typography';
 import { Plan } from '../../types/plan';
@@ -53,12 +52,6 @@ export default function SummaryPanel({ plan }: { plan: Plan | null }) {
             <StatRow label="Conflicts" value={stats.conflicts} />
           </div>
         )}
-      </div>
-
-      <div className="p-4 border-t border-border-color flex-shrink-0">
-        <Button onClick={() => {}} disabled className="w-full" title="Coming soon">
-          Commit Plan
-        </Button>
       </div>
     </div>
   );
