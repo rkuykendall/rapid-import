@@ -73,60 +73,66 @@ export default function LeftPanel({
   const sourceItems = useMemo(() => distinctFolders(profiles, 'source_root'), [profiles]);
 
   return (
-    <div className="h-full overflow-y-auto flex flex-col">
-      <RecentFoldersList
-        label="Destinations"
-        addLabel="Add destination"
-        emptyMessage="No destinations yet — add one to get started."
-        items={destinationItems}
-        activeValue={activeDestinationRoot}
-        onSelect={onSelectDestination}
-      />
+    <div className="h-full flex flex-col">
+      <div className="p-3 flex justify-between items-center shrink-0 border-b border-surface">
+        <Text variant={TextVariants.title}>Setup</Text>
+      </div>
 
-      {hasDestination && (
-        <>
-          <div className="border-t border-border-color">
-            <RecentFoldersList
-              label="Source"
-              addLabel="Add source"
-              emptyMessage="No sources yet — add one to get started."
-              items={sourceItems}
-              activeValue={effectiveSourceRoot}
-              onSelect={onSourceRootChange}
-              disabled={reorganizeInPlace}
-            />
-            <div className="px-3 pb-3">
-              <Switch
-                label="Same as destination (reorganize)"
-                checked={reorganizeInPlace}
-                onChange={onReorganizeInPlaceChange}
-                className="w-fit gap-3"
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+        <RecentFoldersList
+          label="Destinations"
+          addLabel="Add destination"
+          emptyMessage="No destinations yet — add one to get started."
+          items={destinationItems}
+          activeValue={activeDestinationRoot}
+          onSelect={onSelectDestination}
+        />
+
+        {hasDestination && (
+          <>
+            <div className="border-t border-border-color/50">
+              <RecentFoldersList
+                label="Source"
+                addLabel="Add source"
+                emptyMessage="No sources yet — add one to get started."
+                items={sourceItems}
+                activeValue={effectiveSourceRoot}
+                onSelect={onSourceRootChange}
+                disabled={reorganizeInPlace}
               />
+              <div className="px-3 pb-3">
+                <Switch
+                  label="Same as destination (reorganize)"
+                  checked={reorganizeInPlace}
+                  onChange={onReorganizeInPlaceChange}
+                  className="w-fit gap-3"
+                />
+              </div>
             </div>
-          </div>
 
-          <div className="border-t border-border-color p-3 flex-shrink-0 flex flex-col gap-1">
-            <Text variant={TextVariants.small} className="uppercase tracking-wide">
-              Folder template
-            </Text>
-            <Input value={folderTemplate} onChange={(e) => onFolderTemplateChange(e.target.value)} />
-            <div className="flex items-center justify-between gap-2">
-              <Text variant={TextVariants.small}>
-                Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
+            <div className="border-t border-border-color/50 p-3 flex-shrink-0 flex flex-col gap-1">
+              <Text variant={TextVariants.small} className="uppercase tracking-wide">
+                Folder template
               </Text>
-              <button
-                type="button"
-                onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
-                aria-label="Open chrono strftime format reference in browser"
-                className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors shrink-0"
-              >
-                chrono format reference
-                <ExternalLink size={12} />
-              </button>
+              <Input value={folderTemplate} onChange={(e) => onFolderTemplateChange(e.target.value)} />
+              <div className="flex items-center justify-between gap-2">
+                <Text variant={TextVariants.small}>
+                  Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
+                </Text>
+                <button
+                  type="button"
+                  onClick={() => open(CHRONO_STRFTIME_DOCS_URL)}
+                  aria-label="Open chrono strftime format reference in browser"
+                  className="flex items-center gap-1 text-xs text-text-secondary hover:text-accent transition-colors shrink-0"
+                >
+                  chrono format reference
+                  <ExternalLink size={12} />
+                </button>
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -78,7 +78,7 @@ export default function App() {
           <TitleBar />
         </div>
         <div className="flex-1 flex flex-col min-h-0 p-2 gap-2">
-          <div className="flex flex-row flex-grow h-full min-h-0 gap-2">
+          <div className="flex flex-row flex-grow h-full min-h-0">
             <div
               className="flex-shrink-0 bg-bg-secondary rounded-lg overflow-hidden"
               style={{ width: leftPanel.width }}
@@ -102,9 +102,14 @@ export default function App() {
 
             <div className="flex-1 flex flex-col min-w-0 bg-bg-secondary rounded-lg overflow-hidden">
               {!hasDestination ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <Text variant={TextVariants.body}>Select or add a destination on the left to get started.</Text>
-                </div>
+                <>
+                  <div className="p-3 shrink-0 flex justify-between items-center border-b border-surface gap-4">
+                    <Text variant={TextVariants.headline}>Plan</Text>
+                  </div>
+                  <div className="flex-1 flex items-center justify-center">
+                    <Text variant={TextVariants.body}>Select or add a destination on the left to get started.</Text>
+                  </div>
+                </>
               ) : (
                 <PlanTable plan={plan} />
               )}

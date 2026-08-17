@@ -55,8 +55,8 @@ export default function SummaryPanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-4 border-b border-border-color flex-shrink-0">
-        <Text variant={TextVariants.heading}>Summary</Text>
+      <div className="p-3 flex justify-between items-center shrink-0 border-b border-surface">
+        <Text variant={TextVariants.title}>Summary</Text>
       </div>
 
       <div className="flex-grow overflow-y-auto p-4">
@@ -74,7 +74,7 @@ export default function SummaryPanel({
         )}
       </div>
 
-      <div className="p-4 border-t border-border-color flex-shrink-0 flex flex-col gap-2">
+      <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-2">
         {isPlanCurrent ? (
           <Button disabled className="w-full" data-tooltip="Coming soon">
             <Import size={16} />

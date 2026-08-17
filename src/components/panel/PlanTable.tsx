@@ -120,93 +120,99 @@ export default function PlanTable({ plan }: { plan: Plan | null }) {
     }
   };
 
-  if (!plan) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <Text variant={TextVariants.body}>Run a scan to see results here.</Text>
-      </div>
-    );
-  }
-
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex items-center justify-between gap-4 px-4 py-2 border-b border-border-color flex-shrink-0">
-        <Text variant={TextVariants.body}>
-          {plan.items.length} file{plan.items.length === 1 ? '' : 's'} scanned. Nothing has been written — this is a
-          dry-run preview only.
-        </Text>
-        <Dropdown
-          className="w-48 shrink-0"
-          value={statusFilter}
-          onChange={(value) => setStatusFilter(value)}
-          options={STATUS_FILTER_OPTIONS}
-        />
+      <div className="p-3 shrink-0 flex justify-between items-center border-b border-surface gap-4">
+        <Text variant={TextVariants.headline}>Plan</Text>
+        {plan && (
+          <Dropdown
+            className="w-48 shrink-0"
+            value={statusFilter}
+            onChange={(value) => setStatusFilter(value)}
+            options={STATUS_FILTER_OPTIONS}
+          />
+        )}
       </div>
 
-      {rows.length === 0 ? (
+      {!plan ? (
         <div className="flex-1 flex items-center justify-center">
-          <Text variant={TextVariants.body}>No files match this filter.</Text>
+          <Text variant={TextVariants.body}>Run a scan to see results here.</Text>
         </div>
       ) : (
-        <div className="flex-1 overflow-auto">
-          <table className="w-full text-sm border-collapse">
-            <thead className="sticky top-0 bg-bg-secondary">
-              <tr>
-                {COLUMNS.map((col) => (
-                  <th key={col.key} className="text-left px-4 py-2 border-b border-border-color font-medium">
-                    <button
-                      type="button"
-                      onClick={() => handleSortClick(col.key)}
-                      className="flex items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
-                    >
-                      {col.label}
-                      {sortKey === col.key && (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
-                    </button>
-                  </th>
-                ))}
-                <th className="text-left px-4 py-2 border-b border-border-color font-medium text-text-secondary">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((item) => {
-                const chosen = item.candidates[0];
-                return (
-                  <tr key={item.source_path} className="hover:bg-card-active/50 transition-colors">
-                    <td
-                      className="px-4 py-2 border-b border-border-color max-w-xs truncate"
-                      data-tooltip={item.source_path}
-                    >
-                      {filename(item.source_path)}
-                    </td>
-                    <td className="px-4 py-2 border-b border-border-color whitespace-nowrap text-text-secondary">
-                      {chosen ? `${chosen.date.replace('T', ' ')} · ${chosen.source}` : '—'}
-                    </td>
-                    <td className="px-4 py-2 border-b border-border-color text-text-secondary">
-                      {chosen ? `${(chosen.confidence * 100).toFixed(0)}%` : '—'}
-                    </td>
-                    <td
-                      className="px-4 py-2 border-b border-border-color max-w-sm truncate text-text-secondary"
-                      data-tooltip={item.destination_path ?? undefined}
-                    >
-                      {item.destination_path ?? '(unresolved)'}
-                    </td>
-                    <td className="px-4 py-2 border-b border-border-color">
-                      <div className="flex gap-1.5 flex-wrap">
-                        {badgesFor(item).map((b) => (
-                          <Badge key={b.text} tone={b.tone}>
-                            {b.text}
-                          </Badge>
-                        ))}
-                      </div>
-                    </td>
+        <>
+          <div className="px-4 py-2 border-b border-border-color/50 flex-shrink-0">
+            <Text variant={TextVariants.body}>
+              {plan.items.length} file{plan.items.length === 1 ? '' : 's'} scanned. Nothing has been written — this is a
+              dry-run preview only.
+            </Text>
+          </div>
+
+          {rows.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center">
+              <Text variant={TextVariants.body}>No files match this filter.</Text>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead className="sticky top-0 bg-bg-secondary">
+                  <tr>
+                    {COLUMNS.map((col) => (
+                      <th key={col.key} className="text-left px-4 py-2 border-b border-border-color font-medium">
+                        <button
+                          type="button"
+                          onClick={() => handleSortClick(col.key)}
+                          className="flex items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
+                        >
+                          {col.label}
+                          {sortKey === col.key && (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
+                        </button>
+                      </th>
+                    ))}
+                    <th className="text-left px-4 py-2 border-b border-border-color font-medium text-text-secondary">
+                      Status
+                    </th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {rows.map((item) => {
+                    const chosen = item.candidates[0];
+                    return (
+                      <tr key={item.source_path} className="hover:bg-card-active/50 transition-colors">
+                        <td
+                          className="px-4 py-2 border-b border-border-color max-w-xs truncate"
+                          data-tooltip={item.source_path}
+                        >
+                          {filename(item.source_path)}
+                        </td>
+                        <td className="px-4 py-2 border-b border-border-color whitespace-nowrap text-text-secondary">
+                          {chosen ? `${chosen.date.replace('T', ' ')} · ${chosen.source}` : '—'}
+                        </td>
+                        <td className="px-4 py-2 border-b border-border-color text-text-secondary">
+                          {chosen ? `${(chosen.confidence * 100).toFixed(0)}%` : '—'}
+                        </td>
+                        <td
+                          className="px-4 py-2 border-b border-border-color max-w-sm truncate text-text-secondary"
+                          data-tooltip={item.destination_path ?? undefined}
+                        >
+                          {item.destination_path ?? '(unresolved)'}
+                        </td>
+                        <td className="px-4 py-2 border-b border-border-color">
+                          <div className="flex gap-1.5 flex-wrap">
+                            {badgesFor(item).map((b) => (
+                              <Badge key={b.text} tone={b.tone}>
+                                {b.text}
+                              </Badge>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
