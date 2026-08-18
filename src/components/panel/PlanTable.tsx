@@ -202,12 +202,18 @@ export default function PlanTable({
 
   const rows = useMemo(() => {
     if (!plan) return [];
-    const filtered = plan.items.filter((item) =>
-      matchesFilter(
-        item,
-        statusFilter,
-        duplicateGroupsByPath.has(item.source_path),
-      ),
+    // Sidecars (.xmp/.rrdata/.rrexif) always follow their primary photo's
+    // destination/review status (see scan.rs's align_sidecars_with_primary)
+    // and move alongside it at commit time — they don't need their own row.
+    // The primary instead lists them in the Sidecars column.
+    const filtered = plan.items.filter(
+      (item) =>
+        !item.is_sidecar &&
+        matchesFilter(
+          item,
+          statusFilter,
+          duplicateGroupsByPath.has(item.source_path),
+        ),
     );
     return [...filtered].sort((a, b) => {
       const va = sortValue(a, sortKey);
@@ -295,6 +301,9 @@ export default function PlanTable({
                       </th>
                     ))}
                     <th className="text-left px-4 py-2 border-b border-border-color font-medium text-text-secondary">
+                      Sidecars
+                    </th>
+                    <th className="text-left px-4 py-2 border-b border-border-color font-medium text-text-secondary">
                       Status
                     </th>
                   </tr>
@@ -357,6 +366,13 @@ export default function PlanTable({
                         <td className="px-4 py-2 border-b border-border-color text-text-secondary">
                           {chosen
                             ? `${(chosen.confidence * 100).toFixed(0)}%`
+                            : "—"}
+                        </td>
+                        <td className="px-4 py-2 border-b border-border-color text-text-secondary whitespace-nowrap">
+                          {item.sidecar_extensions.length
+                            ? item.sidecar_extensions
+                                .map((ext) => `.${ext}`)
+                                .join(", ")
                             : "—"}
                         </td>
                         <td className="px-4 py-2 border-b border-border-color">

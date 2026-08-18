@@ -48,6 +48,17 @@ pub fn is_supported_media_file(path: &Path) -> bool {
         .any(|candidate| extension.eq_ignore_ascii_case(candidate))
 }
 
+/// Whether `path`'s own extension is a sidecar format (`.xmp`, `.rrdata`,
+/// `.rrexif`) rather than an actual photo/video. Used to tell `scan.rs`
+/// which items in an associated-file group are true sidecars — folded into
+/// their primary's `sidecar_extensions` for display — versus a real paired
+/// file like a RAW+JPEG sibling, which still gets its own row.
+pub fn is_sidecar_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| SIDECAR_EXTENSIONS.iter().any(|c| ext.eq_ignore_ascii_case(c)))
+}
+
 /// Recovers the base name a primary media file shares with its sidecars,
 /// regardless of which sidecar convention is in play — extension-replaced
 /// (`IMG_0001.xmp` for `IMG_0001.CR3`) or extension-preserved

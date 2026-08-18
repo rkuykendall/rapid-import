@@ -136,6 +136,8 @@ mod tests {
             already_imported: false,
             excluded: false,
             content_hash: Some(hash),
+            is_sidecar: false,
+            sidecar_extensions: vec![],
         }
     }
 

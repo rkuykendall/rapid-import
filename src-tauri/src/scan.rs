@@ -69,6 +69,12 @@ pub fn scan_with_progress(options: &ScanOptions, mut on_item: impl FnMut(usize))
 /// prevent, by making every group's siblings inherit the primary's
 /// destination, candidates, and review status before anything is displayed
 /// or committed.
+///
+/// Also collects the extensions of any *true* sidecar siblings (`is_sidecar`
+/// — `.xmp`/`.rrdata`/`.rrexif`, not a real paired file like a RAW+JPEG) onto
+/// the primary's `sidecar_extensions`, so the Plan table can show one
+/// "Sidecars" column on the primary's row instead of a separate row per
+/// sidecar file.
 fn align_sidecars_with_primary(items: &mut [PlanItem]) {
     for group in crate::plan::group_associated_indices(items) {
         let [primary_index, siblings @ ..] = group.as_slice() else {
@@ -86,13 +92,21 @@ fn align_sidecars_with_primary(items: &mut [PlanItem]) {
         let primary_candidates = primary.candidates.clone();
         let primary_needs_review = primary.needs_review;
 
+        let mut sidecar_extensions = Vec::new();
         for &sibling_index in siblings {
             if let Some(filename) = items[sibling_index].source_path.file_name() {
                 items[sibling_index].destination_path = Some(primary_folder.join(filename));
             }
             items[sibling_index].candidates = primary_candidates.clone();
             items[sibling_index].needs_review = primary_needs_review;
+
+            if items[sibling_index].is_sidecar
+                && let Some(ext) = items[sibling_index].source_path.extension().and_then(|s| s.to_str())
+            {
+                sidecar_extensions.push(ext.to_lowercase());
+            }
         }
+        items[*primary_index].sidecar_extensions = sidecar_extensions;
     }
 }
 
@@ -179,6 +193,8 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
         already_imported,
         excluded: false,
         content_hash,
+        is_sidecar: crate::formats::is_sidecar_file(source_path),
+        sidecar_extensions: Vec::new(),
     }
 }
 
@@ -698,8 +714,19 @@ mod tests {
 
         let primary = find(&plan, "IMG_20230815_141523.CR2");
         assert!(!primary.needs_review);
+        assert!(!primary.is_sidecar);
+        assert_eq!(
+            primary.sidecar_extensions,
+            vec!["rrdata".to_string()],
+            "primary should list its sidecar's extension for the UI's Sidecars column"
+        );
 
         let sidecar = find(&plan, "IMG_20230815_141523.CR2.rrdata");
+        assert!(sidecar.is_sidecar);
+        assert!(
+            sidecar.sidecar_extensions.is_empty(),
+            "the sidecar itself has no sidecars of its own"
+        );
         assert!(
             !sidecar.needs_review,
             "sidecar should inherit the primary's review status, not its own fs-time guess"
@@ -714,6 +741,29 @@ mod tests {
             &destination.path().join("2023/2023-08-15/IMG_20230815_141523.CR2.rrdata"),
             "sidecar should land next to its primary, not wherever its own timestamp resolves to"
         );
+    }
+
+    #[test]
+    fn primary_lists_every_sidecar_extension_when_it_has_more_than_one() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        fs::write(source.path().join("IMG_0001.CR3"), b"raw bytes").unwrap();
+        fs::write(source.path().join("IMG_0001.CR3.xmp"), b"<x/>").unwrap();
+        fs::write(source.path().join("IMG_0001.CR3.rrdata"), b"{}").unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let mut extensions = find(&plan, "IMG_0001.CR3").sidecar_extensions.clone();
+        extensions.sort();
+        assert_eq!(extensions, vec!["rrdata".to_string(), "xmp".to_string()]);
     }
 
     #[test]

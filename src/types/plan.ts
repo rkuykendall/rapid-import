@@ -22,6 +22,8 @@ export interface PlanItem {
   already_imported: boolean;
   excluded: boolean;
   content_hash: string | null;
+  is_sidecar: boolean;
+  sidecar_extensions: string[];
 }
 
 export interface Plan {

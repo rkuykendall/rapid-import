@@ -52,6 +52,17 @@ pub struct PlanItem {
     /// `ScanOptions.index` was `None` — with nothing indexed, nothing needs
     /// hashing at scan time.
     pub content_hash: Option<String>,
+    /// True when this item's own extension is a sidecar format (`.xmp`,
+    /// `.rrdata`, `.rrexif`). The item still moves normally at commit time
+    /// (see `commit_group`) — this only tells the UI to fold it into its
+    /// primary's row instead of showing it as its own.
+    pub is_sidecar: bool,
+    /// Lowercased, no-dot extensions of this item's own sidecar siblings —
+    /// e.g. `["xmp", "rrdata"]` — populated by `scan::align_sidecars_with_primary`
+    /// only on the primary of a group that has sidecar siblings, so the Plan
+    /// table can render one "Sidecars" column instead of a separate row per
+    /// sidecar file. Always empty on an item where `is_sidecar` is true.
+    pub sidecar_extensions: Vec<String>,
 }
 
 impl PlanItem {
@@ -175,6 +186,8 @@ mod tests {
             already_imported: false,
             excluded: false,
             content_hash: None,
+            is_sidecar: false,
+            sidecar_extensions: vec![],
         }
     }
 
