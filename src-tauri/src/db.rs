@@ -147,7 +147,7 @@ pub fn undo_log_path_for_batch(conn: &Connection, batch_id: i64) -> rusqlite::Re
     .optional()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewFileRecord {
     pub content_hash: String,
     pub current_path: String,
@@ -156,13 +156,21 @@ pub struct NewFileRecord {
     pub date_confidence: Option<f64>,
     pub imported_at: String,
     pub batch_id: i64,
+    /// The destination file's size/mtime at commit time — without these, a
+    /// later `scan.rs` reorganize-in-place pass over this same file could
+    /// never recognize it as unchanged (its fast paths are gated on a
+    /// size+mtime match), so every real import would only start benefiting
+    /// from the hash/date reuse fast paths after a separate
+    /// `reindex_cli`/"Refresh Library Index" run populated them instead.
+    pub size: Option<i64>,
+    pub mtime: Option<i64>,
 }
 
 pub fn insert_file(conn: &Connection, file: &NewFileRecord) -> rusqlite::Result<i64> {
     conn.execute(
         "INSERT INTO files
-            (content_hash, current_path, capture_date, date_source, date_confidence, imported_at, batch_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (content_hash, current_path, capture_date, date_source, date_confidence, imported_at, batch_id, size, mtime)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             file.content_hash,
             file.current_path,
@@ -171,6 +179,8 @@ pub fn insert_file(conn: &Connection, file: &NewFileRecord) -> rusqlite::Result<
             file.date_confidence,
             file.imported_at,
             file.batch_id,
+            file.size,
+            file.mtime,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -188,20 +198,14 @@ pub fn find_by_content_hash(conn: &Connection, content_hash: &str) -> rusqlite::
     .optional()
 }
 
-#[derive(Debug, Clone)]
-pub struct IndexedFileHash {
-    pub current_path: String,
-    pub content_hash: String,
-}
-
-/// Bulk fetch of every indexed file's hashes, for `dedup::find_duplicates`
-/// to cross-reference a scan against — a single query beats one round-trip
-/// per scanned file.
-pub fn all_file_hashes(conn: &Connection) -> rusqlite::Result<Vec<IndexedFileHash>> {
-    let mut stmt = conn.prepare("SELECT current_path, content_hash FROM files")?;
-    let rows = stmt.query_map([], |row| {
-        Ok(IndexedFileHash { current_path: row.get(0)?, content_hash: row.get(1)? })
-    })?;
+/// Every indexed path sharing a content hash — the index (`idx_files_content_hash`)
+/// makes this a single indexed lookup. `dedup::find_duplicates` calls this once
+/// per distinct hash in a scan rather than loading the whole `files` table and
+/// comparing in Rust, so cost scales with what's being scanned, not with the
+/// size of the library's whole import history.
+pub fn find_paths_by_content_hash(conn: &Connection, content_hash: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT current_path FROM files WHERE content_hash = ?1")?;
+    let rows = stmt.query_map(params![content_hash], |row| row.get(0))?;
     rows.collect()
 }
 
@@ -213,50 +217,58 @@ pub struct IndexedFileMeta {
     pub size: Option<i64>,
     pub mtime: Option<i64>,
     pub file_id: Option<String>,
+    /// Set only by a real import/commit (`commit.rs::record_move`) —
+    /// `index_library`'s reindex never resolves dates, so a row that's only
+    /// ever been touched by `reindex_cli`/"Refresh Library Index" has these
+    /// as `None`. `scan.rs`'s date-reuse fast path treats that the same as
+    /// "not cached": always safe to fall through to a real EXIF/XMP read.
+    pub capture_date: Option<String>,
+    pub date_source: Option<String>,
+    pub date_confidence: Option<f64>,
 }
 
-/// Whole-table load, same precedent as `all_file_hashes` — `index_library`
-/// diffs a destination walk against this in memory rather than doing one
-/// query per walked file, the same tradeoff `dedup::find_duplicates` already
-/// makes at this same scale.
+const INDEXED_FILE_META_COLUMNS: &str =
+    "id, current_path, content_hash, size, mtime, file_id, capture_date, date_source, date_confidence";
+
+fn row_to_indexed_file_meta(row: &rusqlite::Row) -> rusqlite::Result<IndexedFileMeta> {
+    Ok(IndexedFileMeta {
+        id: row.get(0)?,
+        current_path: row.get(1)?,
+        content_hash: row.get(2)?,
+        size: row.get(3)?,
+        mtime: row.get(4)?,
+        file_id: row.get(5)?,
+        capture_date: row.get(6)?,
+        date_source: row.get(7)?,
+        date_confidence: row.get(8)?,
+    })
+}
+
+/// Whole-table load — `index_library` diffs an entire destination walk
+/// against this in memory rather than doing one query per walked file, since
+/// every row is a candidate match for every walked file (unlike
+/// `dedup::find_duplicates`, which only ever needs the rows for specific
+/// hashes it already has in hand, via `find_paths_by_content_hash`).
 pub fn all_indexed_files(conn: &Connection) -> rusqlite::Result<Vec<IndexedFileMeta>> {
-    let mut stmt = conn.prepare("SELECT id, current_path, content_hash, size, mtime, file_id FROM files")?;
-    let rows = stmt.query_map([], |row| {
-        Ok(IndexedFileMeta {
-            id: row.get(0)?,
-            current_path: row.get(1)?,
-            content_hash: row.get(2)?,
-            size: row.get(3)?,
-            mtime: row.get(4)?,
-            file_id: row.get(5)?,
-        })
-    })?;
+    let mut stmt = conn.prepare(&format!("SELECT {INDEXED_FILE_META_COLUMNS} FROM files"))?;
+    let rows = stmt.query_map([], row_to_indexed_file_meta)?;
     rows.collect()
 }
 
 /// Single-row lookup by `current_path` (which is `UNIQUE`, so this is a
 /// plain indexed lookup) — the fast-path check `scan.rs` uses to recognize
 /// a source file that's unchanged since it was last indexed at this exact
-/// path (same size+mtime), so it can reuse the stored hash instead of
-/// rehashing. Only useful when the source path can actually coincide with
-/// an indexed `current_path` — i.e. reorganize-in-place, where source and
-/// destination are the same tree; a plain import from a different source
-/// (an SD card) will never match anything here, which is correct, since
-/// that content genuinely hasn't been hashed yet.
+/// path (same size+mtime), so it can reuse the stored hash and resolved
+/// date instead of rereading the file. Only useful when the source path can
+/// actually coincide with an indexed `current_path` — i.e. reorganize-in-place,
+/// where source and destination are the same tree; a plain import from a
+/// different source (an SD card) will never match anything here, which is
+/// correct, since that content genuinely hasn't been read yet.
 pub fn find_by_path(conn: &Connection, path: &str) -> rusqlite::Result<Option<IndexedFileMeta>> {
     conn.query_row(
-        "SELECT id, current_path, content_hash, size, mtime, file_id FROM files WHERE current_path = ?1",
+        &format!("SELECT {INDEXED_FILE_META_COLUMNS} FROM files WHERE current_path = ?1"),
         params![path],
-        |row| {
-            Ok(IndexedFileMeta {
-                id: row.get(0)?,
-                current_path: row.get(1)?,
-                content_hash: row.get(2)?,
-                size: row.get(3)?,
-                mtime: row.get(4)?,
-                file_id: row.get(5)?,
-            })
-        },
+        row_to_indexed_file_meta,
     )
     .optional()
 }
@@ -275,6 +287,13 @@ pub struct IndexedFileWrite<'a> {
 /// already being taken by a stale row (e.g. a concurrent import touched the
 /// same path between `index_library`'s initial snapshot read and this
 /// write), so a same-path race self-heals instead of erroring the whole run.
+///
+/// The conflict branch clears `capture_date`/`date_source`/`date_confidence`
+/// — whatever was at this path before had different content (that's what
+/// makes this a conflict, not a plain re-index of the same file), so any
+/// previously-resolved date for the *old* content would be wrong for the
+/// new. `scan.rs`'s date-reuse fast path treats a cleared date the same as
+/// "never resolved": always safe, just not fast.
 pub fn insert_indexed_file(
     conn: &Connection,
     file: &IndexedFileWrite,
@@ -291,7 +310,10 @@ pub fn insert_indexed_file(
             batch_id = excluded.batch_id,
             size = excluded.size,
             mtime = excluded.mtime,
-            file_id = excluded.file_id",
+            file_id = excluded.file_id,
+            capture_date = NULL,
+            date_source = NULL,
+            date_confidence = NULL",
         params![file.content_hash, file.current_path, imported_at, batch_id, file.size, file.mtime, file.file_id],
     )?;
     conn.query_row(
@@ -302,15 +324,22 @@ pub fn insert_indexed_file(
 }
 
 /// Path unchanged, content changed (size/mtime mismatch on rescan) — rehash
-/// happened, refresh everything but the row's original date-resolution
-/// fields, which a plain reindex has no opinion on.
+/// happened, and the previously-resolved date (if any) described the *old*
+/// content, so it's cleared along with everything else rather than left
+/// behind stale. `scan.rs`'s date-reuse fast path only ever trusts a
+/// resolved date alongside a matching size+mtime, so leaving it in place
+/// here — now paired with the *new* size/mtime — would make a stale date
+/// look freshly confirmed.
 pub fn update_file_content(conn: &Connection, id: i64, file: &IndexedFileWrite) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE files SET
             content_hash = ?1,
             size = ?2,
             mtime = ?3,
-            file_id = ?4
+            file_id = ?4,
+            capture_date = NULL,
+            date_source = NULL,
+            date_confidence = NULL
          WHERE id = ?5",
         params![file.content_hash, file.size, file.mtime, file.file_id, id],
     )?;
@@ -391,6 +420,7 @@ mod tests {
                 date_confidence: Some(0.95),
                 imported_at: "2026-08-16T00:00:01".to_string(),
                 batch_id,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -402,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn all_file_hashes_returns_every_row() {
+    fn find_paths_by_content_hash_returns_every_matching_row() {
         let conn = open_in_memory().unwrap();
         let batch_id = insert_batch(
             &conn,
@@ -425,6 +455,21 @@ mod tests {
                 date_confidence: None,
                 imported_at: "2026-08-16T00:00:01".to_string(),
                 batch_id,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        insert_file(
+            &conn,
+            &NewFileRecord {
+                content_hash: "abc123".to_string(),
+                current_path: "/library/a-copy.jpg".to_string(),
+                capture_date: None,
+                date_source: None,
+                date_confidence: None,
+                imported_at: "2026-08-16T00:00:01".to_string(),
+                batch_id,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -438,14 +483,16 @@ mod tests {
                 date_confidence: None,
                 imported_at: "2026-08-16T00:00:01".to_string(),
                 batch_id,
+                ..Default::default()
             },
         )
         .unwrap();
 
-        let hashes = all_file_hashes(&conn).unwrap();
-        assert_eq!(hashes.len(), 2);
-        assert!(hashes.iter().any(|h| h.current_path == "/library/a.jpg" && h.content_hash == "abc123"));
-        assert!(hashes.iter().any(|h| h.current_path == "/library/b.jpg" && h.content_hash == "def456"));
+        let mut paths = find_paths_by_content_hash(&conn, "abc123").unwrap();
+        paths.sort();
+        assert_eq!(paths, vec!["/library/a-copy.jpg".to_string(), "/library/a.jpg".to_string()]);
+
+        assert!(find_paths_by_content_hash(&conn, "not-present").unwrap().is_empty());
     }
 
     #[test]
@@ -614,6 +661,54 @@ mod tests {
     }
 
     #[test]
+    fn insert_indexed_file_conflict_clears_a_previously_resolved_date() {
+        // A row already has real date info from an actual import
+        // (`insert_file`, not `insert_indexed_file`) — then different
+        // content lands at that same path and goes through
+        // `insert_indexed_file`'s conflict branch (as a reindex would treat
+        // it). The stale date must not survive: it described the *old*
+        // content, and `scan.rs`'s date-reuse fast path would otherwise
+        // wrongly trust it once size/mtime start matching the new file.
+        let conn = open_in_memory().unwrap();
+        let batch_id = index_batch(&conn);
+        insert_file(
+            &conn,
+            &NewFileRecord {
+                content_hash: "old-hash".to_string(),
+                current_path: "/library/a.jpg".to_string(),
+                capture_date: Some("2023-08-15T14:15:23".to_string()),
+                date_source: Some("exif".to_string()),
+                date_confidence: Some(0.95),
+                imported_at: "2026-08-16T00:00:01".to_string(),
+                batch_id,
+                size: Some(10),
+                mtime: Some(100),
+            },
+        )
+        .unwrap();
+
+        insert_indexed_file(
+            &conn,
+            &IndexedFileWrite {
+                current_path: "/library/a.jpg",
+                content_hash: "new-hash",
+                size: Some(20),
+                mtime: Some(200),
+                file_id: None,
+            },
+            "2026-08-16T00:00:02",
+            batch_id,
+        )
+        .unwrap();
+
+        let all = all_indexed_files(&conn).unwrap();
+        assert_eq!(all[0].content_hash, "new-hash");
+        assert!(all[0].capture_date.is_none(), "a content conflict must clear the old date, not carry it forward");
+        assert!(all[0].date_source.is_none());
+        assert!(all[0].date_confidence.is_none());
+    }
+
+    #[test]
     fn update_file_content_rehashes_in_place() {
         let conn = open_in_memory().unwrap();
         let batch_id = index_batch(&conn);
@@ -648,6 +743,51 @@ mod tests {
         assert_eq!(all[0].content_hash, "new-hash");
         assert_eq!(all[0].current_path, "/library/a.jpg", "content update must not touch the path");
         assert_eq!(all[0].size, Some(20));
+    }
+
+    #[test]
+    fn update_file_content_clears_a_previously_resolved_date() {
+        // Same scenario as `insert_indexed_file_conflict_clears_a_previously_resolved_date`,
+        // but via the more common real path: a reindex finds the *same*
+        // path with mismatched size/mtime (content changed in place) and
+        // goes through `update_file_content` rather than a conflict insert.
+        let conn = open_in_memory().unwrap();
+        let batch_id = index_batch(&conn);
+        insert_file(
+            &conn,
+            &NewFileRecord {
+                content_hash: "old-hash".to_string(),
+                current_path: "/library/a.jpg".to_string(),
+                capture_date: Some("2023-08-15T14:15:23".to_string()),
+                date_source: Some("exif".to_string()),
+                date_confidence: Some(0.95),
+                imported_at: "2026-08-16T00:00:01".to_string(),
+                batch_id,
+                size: Some(10),
+                mtime: Some(100),
+            },
+        )
+        .unwrap();
+        let id = all_indexed_files(&conn).unwrap()[0].id;
+
+        update_file_content(
+            &conn,
+            id,
+            &IndexedFileWrite {
+                current_path: "/library/a.jpg",
+                content_hash: "new-hash",
+                size: Some(20),
+                mtime: Some(200),
+                file_id: None,
+            },
+        )
+        .unwrap();
+
+        let all = all_indexed_files(&conn).unwrap();
+        assert_eq!(all[0].content_hash, "new-hash");
+        assert!(all[0].capture_date.is_none(), "a content change must clear the old date, not carry it forward");
+        assert!(all[0].date_source.is_none());
+        assert!(all[0].date_confidence.is_none());
     }
 
     #[test]

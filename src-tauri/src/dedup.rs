@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,8 +11,19 @@ use crate::plan::PlanItem;
 /// index (e.g. re-scanning the same SD card after a prior import).
 pub fn content_hash(path: &Path) -> io::Result<String> {
     let mut file = fs::File::open(path)?;
+    hash_reader(&mut file)
+}
+
+/// Same hash as `content_hash`, but over an already-open reader — lets a
+/// caller that already has the file open for something else (`scan.rs`
+/// reads EXIF first) finish the job on that same handle instead of a
+/// second `File::open`. For TIFF-based RAW formats, `kamadak-exif` already
+/// reads the whole file into memory to find the EXIF IFD, so reusing that
+/// same open file for hashing (after seeking back to the start) avoids
+/// reading those bytes from disk twice, not just avoiding a second syscall.
+pub fn hash_reader(reader: &mut impl io::Read) -> io::Result<String> {
     let mut hasher = blake3::Hasher::new();
-    io::copy(&mut file, &mut hasher)?;
+    io::copy(reader, &mut hasher)?;
     Ok(hasher.finalize().to_hex().to_string())
 }
 
@@ -28,17 +40,6 @@ pub struct DuplicateGroup {
     pub members: Vec<PathBuf>,
 }
 
-#[derive(Clone, Copy)]
-struct HashRef<'a> {
-    path: &'a Path,
-    content_hash: &'a str,
-}
-
-fn compare(a: HashRef, b: HashRef) -> Option<DuplicateGroup> {
-    (a.content_hash == b.content_hash)
-        .then(|| DuplicateGroup { members: vec![a.path.to_path_buf(), b.path.to_path_buf()] })
-}
-
 /// Cross-references every scanned file's content hash against both the
 /// other files in this same scan and the SQLite index, per §7
 /// (`get_duplicates`: "against the SQLite index and against other files in
@@ -53,29 +54,38 @@ fn compare(a: HashRef, b: HashRef) -> Option<DuplicateGroup> {
 /// (index was `None` at scan time) is silently excluded, same as before:
 /// with nothing indexed there was never anything to cross-reference it
 /// against anyway.
+///
+/// The index side does one `find_paths_by_content_hash` lookup per *distinct*
+/// hash in this scan, leaning on `idx_files_content_hash` — not a bulk load
+/// of the whole `files` table compared in Rust. Cost scales with what's
+/// actually being scanned, not with how large the library's import history
+/// has grown.
 pub fn find_duplicates(conn: &rusqlite::Connection, items: &[PlanItem]) -> Vec<DuplicateGroup> {
-    let hashed: Vec<&PlanItem> = items.iter().filter(|item| item.content_hash.is_some()).collect();
-
-    let indexed = db::all_file_hashes(conn).unwrap_or_default();
+    let mut by_hash: HashMap<&str, Vec<&Path>> = HashMap::new();
+    for item in items {
+        if let Some(hash) = item.content_hash.as_deref() {
+            by_hash.entry(hash).or_default().push(&item.source_path);
+        }
+    }
 
     let mut groups = Vec::new();
-    for i in 0..hashed.len() {
-        let a = HashRef { path: &hashed[i].source_path, content_hash: hashed[i].content_hash.as_deref().unwrap() };
 
-        for other in &hashed[i + 1..] {
-            let b = HashRef { path: &other.source_path, content_hash: other.content_hash.as_deref().unwrap() };
-            if let Some(group) = compare(a, b) {
-                groups.push(group);
+    for paths in by_hash.values() {
+        for i in 0..paths.len() {
+            for other in &paths[i + 1..] {
+                groups.push(DuplicateGroup { members: vec![paths[i].to_path_buf(), other.to_path_buf()] });
             }
         }
+    }
 
-        for existing in &indexed {
-            if existing.current_path == hashed[i].source_path.to_string_lossy() {
-                continue;
-            }
-            let b = HashRef { path: Path::new(&existing.current_path), content_hash: &existing.content_hash };
-            if let Some(group) = compare(a, b) {
-                groups.push(group);
+    for (&hash, paths) in &by_hash {
+        let indexed_paths = db::find_paths_by_content_hash(conn, hash).unwrap_or_default();
+        for &source_path in paths {
+            for indexed_path in &indexed_paths {
+                if *indexed_path == source_path.to_string_lossy() {
+                    continue;
+                }
+                groups.push(DuplicateGroup { members: vec![source_path.to_path_buf(), PathBuf::from(indexed_path)] });
             }
         }
     }
@@ -172,6 +182,7 @@ mod tests {
                 date_confidence: None,
                 imported_at: "2026-08-01T00:00:01".to_string(),
                 batch_id,
+                ..Default::default()
             },
         )
         .unwrap();

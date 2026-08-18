@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -51,7 +51,7 @@ pub fn scan_with_progress(options: &ScanOptions, mut on_item: impl FnMut(usize))
     }
 
     align_sidecars_with_primary(&mut items);
-    flag_conflicts(&mut items);
+    flag_conflicts(&mut items, options.index);
 
     Plan { items }
 }
@@ -102,12 +102,52 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
         .and_then(|n| n.to_str())
         .unwrap_or_default();
 
+    // One stat, reused below for both fs timestamps and the indexed-row
+    // staleness check — rather than three separate `fs::metadata` calls for
+    // the same file.
+    let metadata = fs::metadata(source_path).ok();
+
+    // One indexed-row lookup (when indexing at all), reused below for both
+    // the resolved-date fast path and the content-hash fast path — a single
+    // DB round-trip per file instead of two. `None` just means "no
+    // fast-path data for this exact path" (never indexed, a different path,
+    // or changed since) — always safe to fall through to a real read.
+    let indexed = options.index.and_then(|conn| unchanged_indexed_row(conn, source_path, &metadata));
+
+    // EXIF/XMP are the only two inputs that cost a real file read. A
+    // previous resolution's winning source says whether that read can be
+    // skipped for a file unchanged since then: if EXIF or XMP won, its
+    // stored date is reused directly; if filename or an fs time won, EXIF
+    // and XMP must have been absent/implausible at import time (an
+    // authoritative source is never outranked once present — see
+    // `date_resolution::downgrade_conflicting`), so skipping the read here
+    // reproduces the exact same inputs, not an approximation. These labels
+    // must stay in sync with `commit::date_source_label`.
+    let cached_exif = cached_date(&indexed, "exif");
+    let cached_xmp = cached_date(&indexed, "xmp");
+    let exif_xmp_settled = cached_exif.is_some()
+        || cached_xmp.is_some()
+        || matches!(indexed.as_ref().and_then(|row| row.date_source.as_deref()), Some("filename") | Some("mtime"));
+
+    // One open file, reused below for both the EXIF read and, when hashing
+    // actually turns out to be necessary, the content hash — see
+    // `compute_hash`'s doc comment for why that's more than just saving a
+    // syscall. Skipped entirely when the date fast path above already
+    // settled EXIF/XMP, since then the only remaining reason to open it —
+    // hashing — is also already settled (`indexed` covers both).
+    let mut file_reader = if exif_xmp_settled {
+        None
+    } else {
+        fs::File::open(source_path).ok().map(BufReader::new)
+    };
+
     let inputs = DateInputs {
         filename,
-        exif_date_time_original: read_exif_date(source_path),
-        xmp_date_time_original: sidecar_interop::read_xmp_date(source_path),
-        fs_created: file_time(source_path, |m| m.created()),
-        fs_modified: file_time(source_path, |m| m.modified()),
+        exif_date_time_original: cached_exif.or_else(|| file_reader.as_mut().and_then(read_exif_date)),
+        xmp_date_time_original: cached_xmp
+            .or_else(|| (!exif_xmp_settled).then(|| sidecar_interop::read_xmp_date(source_path)).flatten()),
+        fs_created: metadata.as_ref().and_then(|m| file_time(m, |m| m.created())),
+        fs_modified: metadata.as_ref().and_then(|m| file_time(m, |m| m.modified())),
     };
 
     let resolution = date_resolution::resolve(&inputs, options.now);
@@ -126,7 +166,8 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
         options.destination_root.join(destination_folder).join(filename)
     });
 
-    let (content_hash, already_imported) = compute_hash(source_path, options.index);
+    let (content_hash, already_imported) =
+        compute_hash(source_path, file_reader.as_mut(), indexed.as_ref(), options.index);
 
     PlanItem {
         source_path: source_path.to_path_buf(),
@@ -141,48 +182,89 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
     }
 }
 
+/// The indexed row at this exact path, only if it's unchanged (matching
+/// size+mtime) since it was last indexed — i.e. safe to trust its stored
+/// content hash and resolved date without re-reading the file. `None` for
+/// any other reason (never indexed, a different path, or genuinely changed)
+/// just means "no fast-path data," never a wrong answer either way: a
+/// content change always clears the row's cached hash/date together (see
+/// `db::update_file_content`/`db::insert_indexed_file`), so a stale
+/// size+mtime match can never carry a stale hash or date along with it.
+fn unchanged_indexed_row(conn: &Connection, path: &Path, metadata: &Option<fs::Metadata>) -> Option<db::IndexedFileMeta> {
+    let size = metadata.as_ref().map(|m| m.len() as i64);
+    let mtime = metadata.as_ref().and_then(dedup::mtime_secs);
+    let row = db::find_by_path(conn, &path.to_string_lossy()).ok().flatten()?;
+    (row.size == size && row.mtime == mtime).then_some(row)
+}
+
+/// The indexed row's stored capture date, only if it was actually won by
+/// `label` ("exif" or "xmp" — the two sources a real file read is needed
+/// for). Malformed/unparseable stored data (shouldn't happen, but this
+/// column has no format constraint at the SQL level) is treated the same
+/// as "not cached" — falls through to a real read rather than erroring.
+fn cached_date(indexed: &Option<db::IndexedFileMeta>, label: &str) -> Option<NaiveDateTime> {
+    let row = indexed.as_ref()?;
+    (row.date_source.as_deref() == Some(label))
+        .then_some(row.capture_date.as_deref())
+        .flatten()
+        .and_then(|date| NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%S").ok())
+}
+
 /// Computes this file's content hash and whether it's already present in
 /// the index — or, when possible, skips hashing entirely.
 ///
-/// The fast path: if the index already has a row at this *exact* source
-/// path with a matching size+mtime, the file is unchanged since it was
-/// last indexed/imported, so its stored hash is reused verbatim instead of
-/// re-reading the file. This only ever triggers for reorganize-in-place
-/// (source_root == destination_root) — a plain import's source path (an SD
-/// card) never coincides with any indexed `current_path` — which is
-/// exactly the case that used to mean "rehash every file in the library,
-/// every time you click Scan."
+/// The fast path: `indexed` (already looked up once in `build_plan_item`
+/// via `unchanged_indexed_row`, alongside the date fast path) means this
+/// file is unchanged since it was last indexed/imported, so its stored hash
+/// is reused verbatim instead of re-reading the file. This only ever
+/// triggers for reorganize-in-place (source_root == destination_root) — a
+/// plain import's source path (an SD card) never coincides with any indexed
+/// `current_path` — which is exactly the case that used to mean "rehash
+/// every file in the library, every time you click Scan."
 ///
 /// `dedup::find_duplicates` reuses whatever this returns rather than
 /// hashing a second time itself.
-fn compute_hash(source_path: &Path, index: Option<&Connection>) -> (Option<String>, bool) {
+///
+/// `file_reader` is `build_plan_item`'s already-open EXIF reader (`None`
+/// when the date fast path determined it wasn't needed at all — in which
+/// case `indexed` is always `Some` too, so hashing is never reached below).
+/// When a hash actually needs computing, the reader is rewound and reused
+/// instead of a second `File::open`. For TIFF-based RAW formats,
+/// `read_exif_date` already reads the *entire* file into memory to locate
+/// the EXIF IFD (`kamadak-exif`'s own behavior, not a choice made here) —
+/// reusing that handle avoids reading those bytes off disk twice, not just
+/// avoiding a syscall.
+fn compute_hash(
+    source_path: &Path,
+    file_reader: Option<&mut BufReader<fs::File>>,
+    indexed: Option<&db::IndexedFileMeta>,
+    index: Option<&Connection>,
+) -> (Option<String>, bool) {
     let Some(conn) = index else {
         return (None, false);
     };
 
-    let path_str = source_path.to_string_lossy();
-    let stat = fs::metadata(source_path).ok();
-    let size = stat.as_ref().map(|m| m.len() as i64);
-    let mtime = stat.as_ref().and_then(dedup::mtime_secs);
-
-    if let Ok(Some(indexed)) = db::find_by_path(conn, &path_str)
-        && indexed.size == size
-        && indexed.mtime == mtime
-    {
-        return (Some(indexed.content_hash), true);
+    if let Some(row) = indexed {
+        return (Some(row.content_hash.clone()), true);
     }
 
-    let Ok(content_hash) = dedup::content_hash(source_path) else {
+    let content_hash = match file_reader {
+        Some(reader) => reader
+            .seek(SeekFrom::Start(0))
+            .ok()
+            .and_then(|_| dedup::hash_reader(reader).ok()),
+        None => None,
+    }
+    .or_else(|| dedup::content_hash(source_path).ok());
+    let Some(content_hash) = content_hash else {
         return (None, false);
     };
     let already_imported = matches!(db::find_by_content_hash(conn, &content_hash), Ok(Some(_)));
     (Some(content_hash), already_imported)
 }
 
-fn read_exif_date(path: &Path) -> Option<NaiveDateTime> {
-    let file = fs::File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
-    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+fn read_exif_date<R: BufRead + Seek>(reader: &mut R) -> Option<NaiveDateTime> {
+    let exif = exif::Reader::new().read_from_container(reader).ok()?;
     let field = exif.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)?;
     let raw = field.display_value().to_string();
     let cleaned = raw.trim_matches('"').trim();
@@ -192,11 +274,10 @@ fn read_exif_date(path: &Path) -> Option<NaiveDateTime> {
 }
 
 fn file_time(
-    path: &Path,
+    metadata: &fs::Metadata,
     extract: fn(&fs::Metadata) -> std::io::Result<SystemTime>,
 ) -> Option<NaiveDateTime> {
-    let metadata = fs::metadata(path).ok()?;
-    let system_time = extract(&metadata).ok()?;
+    let system_time = extract(metadata).ok()?;
     let datetime: DateTime<Local> = system_time.into();
     Some(datetime.naive_local())
 }
@@ -222,7 +303,7 @@ fn preserve_existing_subfolder(source_path: &Path, source_root: &Path, rendered_
 /// reorganize-in-place case) and conflicts: destinations that collide with
 /// an existing file on disk, or with another item resolved in this same
 /// plan.
-fn flag_conflicts(items: &mut [PlanItem]) {
+fn flag_conflicts(items: &mut [PlanItem], index: Option<&Connection>) {
     let mut destination_counts: HashMap<PathBuf, usize> = HashMap::new();
     for item in items.iter() {
         if let Some(dest) = &item.destination_path {
@@ -243,7 +324,8 @@ fn flag_conflicts(items: &mut [PlanItem]) {
         if destination_counts.get(dest).copied().unwrap_or(0) > 1 {
             item.conflict = ConflictKind::DuplicateInPlan;
         } else if dest.exists() {
-            item.conflict = if has_identical_content(&item.source_path, dest) {
+            let is_duplicate = has_identical_content(&item.source_path, dest, item.content_hash.as_deref(), index);
+            item.conflict = if is_duplicate {
                 ConflictKind::DuplicateAtDestination
             } else {
                 ConflictKind::DestinationExists
@@ -267,11 +349,43 @@ fn is_same_file(source: &Path, destination: &Path) -> bool {
 /// `ConflictKind`. There is no `Overwrite` option anywhere in this app
 /// precisely so this check can't be skipped: identical content is always
 /// safe to leave alone, different content is never safe to destroy.
-fn has_identical_content(source: &Path, destination: &Path) -> bool {
-    match (dedup::content_hash(source), dedup::content_hash(destination)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    }
+///
+/// `known_source_hash` is `item.content_hash`, already computed by
+/// `compute_hash` for every item — reused here instead of rehashing the
+/// source file a second time. Only falls back to hashing it fresh when
+/// there is none (indexing was off for this scan). The destination side
+/// gets the same treatment via `indexed_hash_if_unchanged` — a real naming
+/// collision only ever happens against a file already living in the
+/// library, which is exactly the kind of file a prior `reindex_cli`/
+/// "Refresh Library Index" run is likely to have already hashed.
+fn has_identical_content(source: &Path, destination: &Path, known_source_hash: Option<&str>, index: Option<&Connection>) -> bool {
+    let source_hash = match known_source_hash {
+        Some(hash) => hash.to_string(),
+        None => match dedup::content_hash(source) {
+            Ok(hash) => hash,
+            Err(_) => return false,
+        },
+    };
+
+    let dest_hash = match indexed_hash_if_unchanged(destination, index) {
+        Some(hash) => hash,
+        None => match dedup::content_hash(destination) {
+            Ok(hash) => hash,
+            Err(_) => return false,
+        },
+    };
+
+    dest_hash == source_hash
+}
+
+/// Mirrors `compute_hash`'s fast path but for a destination path: if the
+/// index already has a row here with matching size+mtime, its stored hash
+/// is reused instead of rehashing a file that's already been hashed once
+/// before.
+fn indexed_hash_if_unchanged(path: &Path, index: Option<&Connection>) -> Option<String> {
+    let conn = index?;
+    let metadata = fs::metadata(path).ok();
+    unchanged_indexed_row(conn, path, &metadata).map(|row| row.content_hash)
 }
 
 #[cfg(test)]
@@ -396,6 +510,67 @@ mod tests {
         assert_eq!(
             find(&plan, "IMG_20230815_141523.jpg").conflict,
             ConflictKind::DuplicateAtDestination
+        );
+    }
+
+    #[test]
+    fn reuses_the_indexed_hash_for_an_unchanged_destination_file() {
+        // Proves `has_identical_content` reuses a stored hash for the
+        // destination side rather than rehashing it: the indexed hash here
+        // is planted equal to the *source*'s hash (so a match means the
+        // stored value was used), while the destination's real on-disk
+        // bytes differ (so a fresh rehash would say DestinationExists, not
+        // DuplicateAtDestination).
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let source_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&source_path, b"source bytes").unwrap();
+        let source_hash = dedup::content_hash(&source_path).unwrap();
+
+        fs::create_dir_all(destination.path().join("2023/2023-08-15")).unwrap();
+        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        fs::write(&dest_path, b"different bytes actually on disk at the destination").unwrap();
+        let dest_meta = fs::metadata(&dest_path).unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "index".to_string(),
+                undo_log_path: String::new(),
+            },
+        )
+        .unwrap();
+        db::insert_indexed_file(
+            &conn,
+            &db::IndexedFileWrite {
+                current_path: &dest_path.to_string_lossy(),
+                content_hash: &source_hash,
+                size: Some(dest_meta.len() as i64),
+                mtime: dedup::mtime_secs(&dest_meta),
+                file_id: None,
+            },
+            "2026-08-01T00:00:01",
+            batch_id,
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+
+        assert_eq!(
+            find(&plan, "IMG_20230815_141523.jpg").conflict,
+            ConflictKind::DuplicateAtDestination,
+            "should trust the indexed hash rather than rehashing the destination's real (different) bytes"
         );
     }
 
@@ -715,6 +890,7 @@ mod tests {
                 date_confidence: Some(0.95),
                 imported_at: "2026-08-01T00:00:01".to_string(),
                 batch_id,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -847,5 +1023,117 @@ mod tests {
 
         let real_hash = dedup::content_hash(&path).unwrap();
         assert_eq!(item.content_hash.as_deref(), Some(real_hash.as_str()));
+    }
+
+    #[test]
+    fn reuses_the_indexed_date_for_a_file_unchanged_since_it_was_indexed() {
+        // "DSC00001.jpg" has no filename-pattern match, and the fixture
+        // bytes below aren't real EXIF — so the only way the planted
+        // 2020-01-01 date could show up as chosen is via the cached-date
+        // fast path, not a real (impossible) read of this fixture.
+        let library = tempfile::tempdir().unwrap();
+        let path = library.path().join("DSC00001.jpg");
+        fs::write(&path, b"fixture bytes").unwrap();
+        let meta = fs::metadata(&path).unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "import".to_string(),
+                undo_log_path: "/tmp/undo.json".to_string(),
+            },
+        )
+        .unwrap();
+        db::insert_file(
+            &conn,
+            &db::NewFileRecord {
+                content_hash: "sentinel-hash".to_string(),
+                current_path: path.to_string_lossy().to_string(),
+                capture_date: Some("2020-01-01T00:00:00".to_string()),
+                date_source: Some("exif".to_string()),
+                date_confidence: Some(0.95),
+                imported_at: "2026-08-01T00:00:01".to_string(),
+                batch_id,
+                size: Some(meta.len() as i64),
+                mtime: dedup::mtime_secs(&meta),
+            },
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+        let chosen = find(&plan, "DSC00001.jpg").chosen().unwrap();
+
+        assert_eq!(
+            chosen.date,
+            NaiveDateTime::parse_from_str("2020-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap()
+        );
+        assert_eq!(chosen.source, crate::date_resolution::DateSource::Exif);
+    }
+
+    #[test]
+    fn skips_the_exif_xmp_read_when_a_previous_scan_found_neither_present() {
+        // date_source "mtime" means EXIF/XMP were absent/implausible last
+        // time this file was resolved (an authoritative source is never
+        // outranked once present, so "mtime" winning proves neither was
+        // there) — the filename pattern's date should still win fresh
+        // (computed from the path string, not the index) even though the
+        // EXIF/XMP read itself is skipped.
+        let library = tempfile::tempdir().unwrap();
+        let path = library.path().join("IMG_20230815_141523.jpg");
+        fs::write(&path, b"fixture bytes").unwrap();
+        let meta = fs::metadata(&path).unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "import".to_string(),
+                undo_log_path: "/tmp/undo.json".to_string(),
+            },
+        )
+        .unwrap();
+        db::insert_file(
+            &conn,
+            &db::NewFileRecord {
+                content_hash: "sentinel-hash".to_string(),
+                current_path: path.to_string_lossy().to_string(),
+                capture_date: Some("2023-08-15T09:00:00".to_string()),
+                date_source: Some("mtime".to_string()),
+                date_confidence: Some(0.2),
+                imported_at: "2026-08-01T00:00:01".to_string(),
+                batch_id,
+                size: Some(meta.len() as i64),
+                mtime: dedup::mtime_secs(&meta),
+            },
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+        let chosen = find(&plan, "IMG_20230815_141523.jpg").chosen().unwrap();
+
+        assert_eq!(
+            chosen.source,
+            crate::date_resolution::DateSource::Filename,
+            "the filename pattern should still win fresh, even though the EXIF/XMP read was skipped"
+        );
     }
 }

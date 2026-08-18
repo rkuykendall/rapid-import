@@ -341,6 +341,12 @@ fn record_move(
     undo_moves: &mut Vec<UndoMove>,
 ) -> Result<()> {
     let chosen = item.chosen();
+    // Size/mtime of the file at its new resting place — without these, a
+    // later reorganize-in-place scan could never recognize this exact file
+    // as unchanged (scan.rs's hash/date reuse fast paths are gated on a
+    // size+mtime match), so a real import would only start benefiting from
+    // them after a separate reindex populated size/mtime on top.
+    let dest_metadata = fs::metadata(destination).ok();
     db::insert_file(
         conn,
         &db::NewFileRecord {
@@ -351,6 +357,8 @@ fn record_move(
             date_confidence: chosen.map(|c| c.confidence as f64),
             imported_at: Utc::now().to_rfc3339(),
             batch_id,
+            size: dest_metadata.as_ref().map(|m| m.len() as i64),
+            mtime: dest_metadata.as_ref().and_then(dedup::mtime_secs),
         },
     )?;
 
@@ -471,6 +479,33 @@ mod tests {
         assert_eq!(manifest.moves.len(), 1);
         assert_eq!(manifest.moves[0].to, dest_path.to_string_lossy());
         assert!(!manifest.moves[0].was_copy);
+    }
+
+    #[test]
+    fn a_real_commit_records_size_and_mtime_so_a_later_rescan_can_use_the_fast_paths() {
+        // Without size/mtime on the row a real import writes, a later
+        // reorganize-in-place scan of this exact file could never recognize
+        // it as unchanged — scan.rs's hash/date reuse fast paths are gated
+        // on a size+mtime match against the indexed row.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        let src_path = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&src_path, b"fixture").unwrap();
+        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+
+        let plan = Plan {
+            items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
+        };
+
+        commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
+
+        let row = db::find_by_path(&conn, &dest_path.to_string_lossy()).unwrap().unwrap();
+        let real_meta = fs::metadata(&dest_path).unwrap();
+        assert_eq!(row.size, Some(real_meta.len() as i64));
+        assert_eq!(row.mtime, dedup::mtime_secs(&real_meta));
     }
 
     #[test]
