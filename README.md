@@ -79,7 +79,7 @@ npm run tauri build
   scan.rs               -- recursive walk + dry-run plan builder
   plan.rs                -- Plan/PlanItem types, folder-template rendering
   commit.rs               -- the only module that writes to disk; undo log
-  dedup.rs                 -- BLAKE3 + perceptual-hash duplicate detection
+  dedup.rs                 -- BLAKE3 exact-duplicate detection
   sidecar_interop.rs        -- read-only .xmp sidecar parsing
   db.rs                      -- SQLite schema + queries
   profiles.rs                -- saved import profiles

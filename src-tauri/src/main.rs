@@ -1,16 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use rapid_import_core::{db, dedup, plan, plan::Plan, profiles, scan};
+use rapid_import_core::{db, dedup, index_library, plan, plan::Plan, profiles, scan};
 use tauri::{Emitter, Manager};
 
-/// `scan_source`'s response: the plan itself, plus every exact/near-
-/// duplicate pairing `dedup::find_duplicates` found (against the rest of
-/// the scan and against the persistent index). Bundled into the one
-/// round-trip rather than a separate command/invoke, since the frontend
-/// always wants both together right after a scan.
+/// `scan_source`'s response: the plan itself, plus every exact-duplicate
+/// pairing `dedup::find_duplicates` found (against the rest of the scan and
+/// against the persistent index). Bundled into the one round-trip rather
+/// than a separate command/invoke, since the frontend always wants both
+/// together right after a scan.
 #[derive(serde::Serialize)]
 struct ScanResult {
     plan: Plan,
@@ -20,6 +20,10 @@ struct ScanResult {
 /// Emit a `scan-progress` event at most this often, to avoid flooding the
 /// frontend with an IPC message per file on a large library.
 const SCAN_PROGRESS_EVERY: usize = 10;
+
+/// Same idea as `SCAN_PROGRESS_EVERY`, but a much larger stride — a library
+/// reindex walks far more files than a single source scan.
+const INDEX_PROGRESS_EVERY: usize = 500;
 
 /// Profiles are keyed by destination path — pick a destination (library),
 /// recall the source/template last used for *that* destination.
@@ -43,6 +47,11 @@ fn profile_name_for(destination_root: &str) -> String {
 
 struct AppState {
     db: Mutex<rusqlite::Connection>,
+    /// `index_library` opens its own short-lived connections (a full-library
+    /// reindex can run far longer than any other command, and shouldn't
+    /// hold the shared `db` lock the whole time) — it needs the path, not
+    /// the live connection.
+    db_path: PathBuf,
 }
 
 /// `async` + `spawn_blocking` deliberately, not a plain `fn` — Tauri runs
@@ -142,6 +151,43 @@ async fn save_profile_for_destination(
     .map_err(|e| e.to_string())?
 }
 
+/// Builds/refreshes the SQLite index from what's actually on disk under
+/// `destination_root` (or, when `scope_root` is given, just that subfolder)
+/// — the mechanism for making `already_imported`/`DuplicatePolicy::Skip`
+/// recognize content that was never imported *through* this app (an
+/// existing library, or one imported by another tool). Explicit and
+/// user-triggered only — a plain `scan_source` never re-walks the
+/// destination itself, which is what keeps every import fast regardless of
+/// how large the destination has grown.
+///
+/// Opens its own connections via `state.db_path` rather than locking
+/// `state.db` for the whole run — a full-library backfill can take a long
+/// time, and shouldn't block `scan_source`/`list_profiles` for its
+/// duration.
+#[tauri::command]
+async fn refresh_library_index(
+    app_handle: tauri::AppHandle,
+    destination_root: String,
+    scope_root: Option<String>,
+) -> Result<index_library::IndexSummary, String> {
+    let progress_handle = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let options = index_library::IndexOptions {
+            destination_root: Path::new(&destination_root),
+            scope_root: scope_root.as_deref().map(Path::new),
+        };
+        index_library::index_library_with_progress(&state.db_path, &options, |count| {
+            if count % INDEX_PROGRESS_EVERY == 0 {
+                let _ = progress_handle.emit("index-progress", count);
+            }
+        })
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Lists every saved profile (one per destination ever used) for the
 /// sidebar — newest-created last, since `profiles::load_profiles` orders
 /// by `id`.
@@ -164,8 +210,9 @@ fn main() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
-            let conn = db::open(&app_data_dir.join("library.sqlite"))?;
-            app.manage(AppState { db: Mutex::new(conn) });
+            let db_path = app_data_dir.join("library.sqlite");
+            let conn = db::open(&db_path)?;
+            app.manage(AppState { db: Mutex::new(conn), db_path });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -173,7 +220,8 @@ fn main() {
             preview_folder_template,
             load_profile_for_destination,
             save_profile_for_destination,
-            list_profiles
+            list_profiles,
+            refresh_library_index
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

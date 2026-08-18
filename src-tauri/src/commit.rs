@@ -249,10 +249,12 @@ fn commit_item(
         .file_name()
         .context("source path has no filename")?;
 
-    // Computed once, before any move, and reused below for the index row —
-    // the file's bytes don't change across a rename/copy, so this stays
-    // valid post-move and avoids hashing the file twice.
-    let source_hash = dedup::content_hash(&item.source_path).ok();
+    // Reuses the hash `scan::build_plan_item` already computed (and,
+    // reused below for the index row, avoids hashing the file a second time
+    // here) — falls back to hashing live only for a `PlanItem` that was
+    // never scanned against an index in the first place (`content_hash` is
+    // only ever `None` when `ScanOptions.index` was `None`).
+    let source_hash = item.content_hash.clone().or_else(|| dedup::content_hash(&item.source_path).ok());
 
     if item.already_imported {
         relocate_duplicate(item, filename, target_folder, source_hash, options, batch_id, undo_moves)?;
@@ -343,7 +345,6 @@ fn record_move(
         conn,
         &db::NewFileRecord {
             content_hash: source_hash.unwrap_or_default(),
-            perceptual_hash: dedup::perceptual_hash(destination),
             current_path: destination.to_string_lossy().to_string(),
             capture_date: chosen.map(|c| c.date.format("%Y-%m-%dT%H:%M:%S").to_string()),
             date_source: chosen.map(|c| date_source_label(c.source).to_string()),
@@ -426,6 +427,7 @@ mod tests {
             no_op: false,
             already_imported: false,
             excluded: false,
+            content_hash: None,
         }
     }
 

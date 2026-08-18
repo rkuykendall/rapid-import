@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use chrono::Local;
 
 use rapid_import_core::db;
-use rapid_import_core::dedup::{self, DuplicateKind};
+use rapid_import_core::dedup;
 use rapid_import_core::plan::ConflictKind;
 use rapid_import_core::scan::{scan, ScanOptions};
 
@@ -92,12 +92,8 @@ fn main() -> ExitCode {
         if !duplicates.is_empty() {
             println!("Duplicate groups:");
             for group in &duplicates {
-                let kind_str = match group.kind {
-                    DuplicateKind::Exact => "EXACT".to_string(),
-                    DuplicateKind::Near(distance) => format!("NEAR (distance {distance})"),
-                };
                 let members: Vec<String> = group.members.iter().map(|p| p.display().to_string()).collect();
-                println!("  [{kind_str}] {}", members.join("  <->  "));
+                println!("  {}", members.join("  <->  "));
             }
             println!();
         }

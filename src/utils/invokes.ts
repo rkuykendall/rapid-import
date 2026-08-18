@@ -7,4 +7,5 @@ export enum Invokes {
   LoadProfileForDestination = 'load_profile_for_destination',
   SaveProfileForDestination = 'save_profile_for_destination',
   ListProfiles = 'list_profiles',
+  RefreshLibraryIndex = 'refresh_library_index',
 }

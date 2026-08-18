@@ -4,6 +4,7 @@ import Text from "../ui/Text";
 import Dropdown from "../ui/Dropdown";
 import PanelHeader from "../ui/PanelHeader";
 import PanelSection from "../ui/PanelSection";
+import LibraryIndexSection from "./LibraryIndexSection";
 import { TextVariants } from "../../types/typography";
 import { Plan } from "../../types/plan";
 
@@ -71,6 +72,7 @@ interface SummaryPanelProps {
   onDuplicatePolicyChange(value: DuplicatePolicy): void;
   transferMode: TransferMode;
   onTransferModeChange(value: TransferMode): void;
+  destinationRoot: string;
 }
 
 export default function SummaryPanel({
@@ -86,6 +88,7 @@ export default function SummaryPanel({
   onDuplicatePolicyChange,
   transferMode,
   onTransferModeChange,
+  destinationRoot,
 }: SummaryPanelProps) {
   const stats = plan ? summarize(plan) : null;
 
@@ -112,6 +115,8 @@ export default function SummaryPanel({
           </div>
         )}
       </div>
+
+      <LibraryIndexSection destinationRoot={destinationRoot} />
 
       <PanelSection label="Transfer">
         <Dropdown

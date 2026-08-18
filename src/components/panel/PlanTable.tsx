@@ -70,7 +70,7 @@ function groupsByPath(
 
 // Same badge set (and the same precedence) as scan_cli's flag rendering in
 // src-tauri/src/bin/scan_cli.rs, so the CLI dry-run and this UI never say
-// different things about the same plan — plus near/exact matches from
+// different things about the same plan — plus exact matches from
 // `find_duplicates`, which scan_cli's own summary line also prints
 // separately (see its "Duplicate groups:" section).
 function badgesFor(
@@ -100,14 +100,13 @@ function badgesFor(
       break;
   }
   if (duplicateGroups?.length) {
-    const isExact = duplicateGroups.some((g) => g.kind.kind === "exact");
     const others = duplicateGroups
       .flatMap((g) => g.members)
       .filter((m) => m !== item.source_path)
       .map((m) => relativeTo(m, sourceRoot));
     badges.push({
-      tone: isExact ? "info" : "warning",
-      text: isExact ? "Duplicate found" : "Near duplicate found",
+      tone: "info",
+      text: "Duplicate found",
       tooltip: `Matches: ${[...new Set(others)].join(", ")}`,
     });
   }

@@ -46,6 +46,12 @@ pub struct PlanItem {
     /// only ever set by a caller mutating `Plan.items` between `scan()`
     /// and `commit_plan()`.
     pub excluded: bool,
+    /// This file's BLAKE3 content hash, computed once by
+    /// `scan::build_plan_item` (and reused by `dedup::find_duplicates`
+    /// rather than being read/hashed a second time). `None` only when
+    /// `ScanOptions.index` was `None` — with nothing indexed, nothing needs
+    /// hashing at scan time.
+    pub content_hash: Option<String>,
 }
 
 impl PlanItem {
@@ -168,6 +174,7 @@ mod tests {
             no_op: false,
             already_imported: false,
             excluded: false,
+            content_hash: None,
         }
     }
 

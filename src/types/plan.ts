@@ -21,21 +21,17 @@ export interface PlanItem {
   no_op: boolean;
   already_imported: boolean;
   excluded: boolean;
+  content_hash: string | null;
 }
 
 export interface Plan {
   items: PlanItem[];
 }
 
-// Mirrors src-tauri/src/dedup.rs's `DuplicateKind`/`DuplicateGroup` — one
-// pairing per match (a file matching three others surfaces as three
+// Mirrors src-tauri/src/dedup.rs's `DuplicateGroup` — one pairing per exact
+// content-hash match (a file matching three others surfaces as three
 // separate pairs, not one cluster), cross-referenced against both the rest
-// of the same scan and the persistent index. `kind: 'exact'` is a content-
-// hash match; `'near'` is a perceptual-hash match within the tuning
-// constant in dedup.rs (re-exports, edited copies, burst sequences).
-export type DuplicateKind = { kind: 'exact' } | { kind: 'near'; distance: number };
-
+// of the same scan and the persistent index.
 export interface DuplicateGroup {
-  kind: DuplicateKind;
   members: string[];
 }

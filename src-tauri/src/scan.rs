@@ -126,10 +126,7 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
         options.destination_root.join(destination_folder).join(filename)
     });
 
-    let already_imported = options
-        .index
-        .map(|conn| is_already_imported(conn, source_path))
-        .unwrap_or(false);
+    let (content_hash, already_imported) = compute_hash(source_path, options.index);
 
     PlanItem {
         source_path: source_path.to_path_buf(),
@@ -140,14 +137,46 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
         no_op: false,
         already_imported,
         excluded: false,
+        content_hash,
     }
 }
 
-fn is_already_imported(conn: &Connection, source_path: &Path) -> bool {
-    let Ok(hash) = dedup::content_hash(source_path) else {
-        return false;
+/// Computes this file's content hash and whether it's already present in
+/// the index — or, when possible, skips hashing entirely.
+///
+/// The fast path: if the index already has a row at this *exact* source
+/// path with a matching size+mtime, the file is unchanged since it was
+/// last indexed/imported, so its stored hash is reused verbatim instead of
+/// re-reading the file. This only ever triggers for reorganize-in-place
+/// (source_root == destination_root) — a plain import's source path (an SD
+/// card) never coincides with any indexed `current_path` — which is
+/// exactly the case that used to mean "rehash every file in the library,
+/// every time you click Scan."
+///
+/// `dedup::find_duplicates` reuses whatever this returns rather than
+/// hashing a second time itself.
+fn compute_hash(source_path: &Path, index: Option<&Connection>) -> (Option<String>, bool) {
+    let Some(conn) = index else {
+        return (None, false);
     };
-    matches!(db::find_by_content_hash(conn, &hash), Ok(Some(_)))
+
+    let path_str = source_path.to_string_lossy();
+    let stat = fs::metadata(source_path).ok();
+    let size = stat.as_ref().map(|m| m.len() as i64);
+    let mtime = stat.as_ref().and_then(dedup::mtime_secs);
+
+    if let Ok(Some(indexed)) = db::find_by_path(conn, &path_str)
+        && indexed.size == size
+        && indexed.mtime == mtime
+    {
+        return (Some(indexed.content_hash), true);
+    }
+
+    let Ok(content_hash) = dedup::content_hash(source_path) else {
+        return (None, false);
+    };
+    let already_imported = matches!(db::find_by_content_hash(conn, &content_hash), Ok(Some(_)));
+    (Some(content_hash), already_imported)
 }
 
 fn read_exif_date(path: &Path) -> Option<NaiveDateTime> {
@@ -680,7 +709,6 @@ mod tests {
             &conn,
             &db::NewFileRecord {
                 content_hash: hash,
-                perceptual_hash: None,
                 current_path: "/library/2023/2023-08-15/IMG_20230815_141523.jpg".to_string(),
                 capture_date: Some("2023-08-15T14:15:23".to_string()),
                 date_source: Some("exif".to_string()),
@@ -721,5 +749,103 @@ mod tests {
         let plan = scan(&options);
 
         assert!(!find(&plan, "IMG_20230815_141523.jpg").already_imported);
+    }
+
+    #[test]
+    fn reuses_indexed_hashes_for_a_file_unchanged_since_it_was_indexed() {
+        // Reorganize-in-place: source and destination are the same tree, so
+        // a file already indexed at this exact path with a matching
+        // size+mtime should be recognized as unchanged and skip hashing
+        // entirely — proven here by planting a hash the real file's bytes
+        // could never produce and confirming it comes back unchanged.
+        let library = tempfile::tempdir().unwrap();
+        let path = library.path().join("IMG_20230815_141523.jpg");
+        fs::write(&path, b"fixture bytes").unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "index".to_string(),
+                undo_log_path: String::new(),
+            },
+        )
+        .unwrap();
+        let meta = fs::metadata(&path).unwrap();
+        db::insert_indexed_file(
+            &conn,
+            &db::IndexedFileWrite {
+                current_path: &path.to_string_lossy(),
+                content_hash: "sentinel-hash-the-real-bytes-would-never-produce",
+                size: Some(meta.len() as i64),
+                mtime: dedup::mtime_secs(&meta),
+                file_id: None,
+            },
+            "2026-08-01T00:00:01",
+            batch_id,
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+        let item = find(&plan, "IMG_20230815_141523.jpg");
+
+        assert_eq!(item.content_hash.as_deref(), Some("sentinel-hash-the-real-bytes-would-never-produce"));
+        assert!(item.already_imported);
+    }
+
+    #[test]
+    fn rehashes_when_the_file_changed_since_it_was_indexed() {
+        let library = tempfile::tempdir().unwrap();
+        let path = library.path().join("IMG_20230815_141523.jpg");
+        fs::write(&path, b"fixture bytes").unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "index".to_string(),
+                undo_log_path: String::new(),
+            },
+        )
+        .unwrap();
+        // Deliberately stale size/mtime, as if the file changed since this
+        // row was written.
+        db::insert_indexed_file(
+            &conn,
+            &db::IndexedFileWrite {
+                current_path: &path.to_string_lossy(),
+                content_hash: "stale-hash",
+                size: Some(999_999),
+                mtime: Some(1),
+                file_id: None,
+            },
+            "2026-08-01T00:00:01",
+            batch_id,
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+        let item = find(&plan, "IMG_20230815_141523.jpg");
+
+        let real_hash = dedup::content_hash(&path).unwrap();
+        assert_eq!(item.content_hash.as_deref(), Some(real_hash.as_str()));
     }
 }

@@ -157,6 +157,7 @@ export default function App() {
                 onDuplicatePolicyChange={setDuplicatePolicy}
                 transferMode={transferMode}
                 onTransferModeChange={setTransferMode}
+                destinationRoot={destinationRoot}
               />
             </Panel>
           </div>

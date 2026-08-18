@@ -4,6 +4,7 @@ pub mod db;
 pub mod dedup;
 pub mod filename_patterns;
 pub mod formats;
+pub mod index_library;
 pub mod plan;
 pub mod profiles;
 pub mod scan;
