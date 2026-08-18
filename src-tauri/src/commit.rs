@@ -38,9 +38,11 @@ pub struct UndoManifest {
 /// copying files off it. `MoveToDuplicatesFolder` exists for reorganizing
 /// an *existing* library in place, where leaving a duplicate sitting at its
 /// messy original spot would undercut the whole point of the pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DuplicatePolicy {
     Skip,
+    #[serde(rename = "duplicates_folder")]
     MoveToDuplicatesFolder,
 }
 
@@ -53,13 +55,14 @@ pub enum DuplicatePolicy {
 /// for `DuplicatePolicy`. Never applies to a duplicate's relocation into
 /// `Duplicates/` (`relocate_duplicate` always physically moves) — that
 /// path only ever runs during a forced-`Move` reorganize anyway.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransferMode {
     Move,
     Copy,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct CommitSummary {
     pub batch_id: i64,
     /// Successfully transferred to their computed destination — moved or
@@ -940,6 +943,56 @@ mod tests {
         let renamed = dest_folder.join("IMG_20230815_141523 (1).jpg");
         assert!(renamed.exists());
         assert_eq!(fs::read_to_string(&dest_path).unwrap(), "already there");
+    }
+
+    #[test]
+    fn a_scanned_plan_round_trips_through_json_before_committing() {
+        // Exercises exactly what the Tauri bridge does: `scan_source`
+        // returns a real `scan::scan`-produced `Plan` serialized to JSON,
+        // the frontend holds it as plain data (toggling `excluded` on some
+        // items), then `commit_plan` receives it back deserialized. Catches
+        // any field that can't round-trip (e.g. `DateCandidate::pattern_name`
+        // used to be a non-deserializable `&'static str`) that per-field
+        // unit tests building a `PlanItem` by hand would never notice.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        fs::write(source.path().join("IMG_20230815_141523.jpg"), b"fixture").unwrap();
+        fs::write(source.path().join("IMG_0001.CR3"), b"raw bytes").unwrap();
+        fs::write(source.path().join("IMG_0001.xmp"), b"xmp bytes").unwrap();
+
+        let scan_options = crate::scan::ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: chrono::NaiveDate::from_ymd_opt(2026, 8, 18).unwrap(),
+            index: Some(&conn),
+        };
+        let scanned = crate::scan::scan(&scan_options);
+        assert_eq!(scanned.items.len(), 3, "sanity check on the fixture itself");
+
+        let json = serde_json::to_string(&scanned).unwrap();
+        let plan: Plan = serde_json::from_str(&json).unwrap();
+
+        let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
+
+        assert_eq!(summary.moved, 3);
+        assert!(destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg").exists());
+        // IMG_0001.CR3/.xmp have no filename-derived date, so they fall back
+        // to fs mtime (today, whenever the test runs) rather than 2023 — the
+        // point here is just that the sidecar followed its primary's folder.
+        let raw_dest = plan
+            .items
+            .iter()
+            .find(|i| i.source_path.file_name().unwrap() == "IMG_0001.CR3")
+            .unwrap()
+            .destination_path
+            .clone()
+            .unwrap();
+        assert!(raw_dest.exists());
+        assert!(raw_dest.with_file_name("IMG_0001.xmp").exists());
     }
 
     #[test]

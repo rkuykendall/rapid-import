@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use rapid_import_core::{db, dedup, index_library, plan, plan::Plan, profiles, scan};
+use rapid_import_core::{commit, db, dedup, index_library, plan, plan::Plan, profiles, scan};
 use tauri::{Emitter, Manager};
 
 /// `scan_source`'s response: the plan itself, plus every exact-duplicate
@@ -188,6 +188,49 @@ async fn refresh_library_index(
     .map_err(|e| e.to_string())?
 }
 
+/// Executes a scanned `Plan` against disk — the only command that actually
+/// copies/moves user files. `conflict_policy` is deliberately not a
+/// parameter: it comes from the destination's saved profile (falling back to
+/// `Skip` for a destination with none yet), same as `date_fallback_order`
+/// already does implicitly via `scan_source`'s index — there's no dedicated
+/// UI for it yet, so this is the one place it's actually read.
+///
+/// `spawn_blocking` for the same reason as `scan_source`: real file I/O
+/// across a whole plan must not block the UI thread.
+#[tauri::command]
+async fn commit_plan(
+    app_handle: tauri::AppHandle,
+    plan: Plan,
+    destination_root: String,
+    duplicate_policy: commit::DuplicatePolicy,
+    transfer_mode: commit::TransferMode,
+    kind: String,
+) -> Result<commit::CommitSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let profile =
+            profiles::find_profile_by_destination_root(&conn, &destination_root).map_err(|e| e.to_string())?;
+        let conflict_policy = profile.as_ref().map(|p| p.conflict_policy).unwrap_or(profiles::ConflictPolicy::Skip);
+        let profile_id = profile.map(|p| p.id);
+        let undo_log_dir = db::default_undo_log_dir().map_err(|e| e.to_string())?;
+
+        let options = commit::CommitOptions {
+            conn: &conn,
+            undo_log_dir: &undo_log_dir,
+            destination_root: Path::new(&destination_root),
+            kind: &kind,
+            profile_id,
+            conflict_policy,
+            duplicate_policy,
+            transfer_mode,
+        };
+        commit::commit_plan(&plan, &options).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Lists every saved profile (one per destination ever used) for the
 /// sidebar — newest-created last, since `profiles::load_profiles` orders
 /// by `id`.
@@ -219,7 +262,8 @@ fn main() {
             load_profile_for_destination,
             save_profile_for_destination,
             list_profiles,
-            refresh_library_index
+            refresh_library_index,
+            commit_plan
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

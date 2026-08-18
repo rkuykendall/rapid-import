@@ -6,7 +6,7 @@ import PanelHeader from "../ui/PanelHeader";
 import PanelSection from "../ui/PanelSection";
 import LibraryIndexSection from "./LibraryIndexSection";
 import { TextVariants } from "../../types/typography";
-import { Plan } from "../../types/plan";
+import { CommitSummary, Plan } from "../../types/plan";
 
 export type DuplicatePolicy = "skip" | "duplicates_folder";
 
@@ -73,6 +73,10 @@ interface SummaryPanelProps {
   transferMode: TransferMode;
   onTransferModeChange(value: TransferMode): void;
   destinationRoot: string;
+  committing: boolean;
+  commitError: string | null;
+  commitSummary: CommitSummary | null;
+  onCommit(): void;
 }
 
 export default function SummaryPanel({
@@ -89,6 +93,10 @@ export default function SummaryPanel({
   transferMode,
   onTransferModeChange,
   destinationRoot,
+  committing,
+  commitError,
+  commitSummary,
+  onCommit,
 }: SummaryPanelProps) {
   const stats = plan ? summarize(plan) : null;
 
@@ -137,9 +145,17 @@ export default function SummaryPanel({
 
       <PanelSection>
         {isPlanCurrent ? (
-          <Button disabled className="w-full" data-tooltip="Coming soon">
-            <Import size={16} />
-            Import
+          <Button
+            onClick={onCommit}
+            disabled={committing || stats?.total === 0}
+            className="w-full"
+          >
+            {committing ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Import size={16} />
+            )}
+            {committing ? "Importing…" : "Import"}
           </Button>
         ) : (
           <Button
@@ -161,6 +177,21 @@ export default function SummaryPanel({
         {error && (
           <Text variant={TextVariants.body} color="error">
             {error}
+          </Text>
+        )}
+        {commitError && (
+          <Text variant={TextVariants.body} color="error">
+            {commitError}
+          </Text>
+        )}
+        {commitSummary && (
+          <Text variant={TextVariants.body}>
+            Imported {commitSummary.moved}, skipped{" "}
+            {commitSummary.skipped +
+              commitSummary.excluded +
+              commitSummary.already_imported +
+              commitSummary.duplicate_at_destination}
+            .
           </Text>
         )}
       </PanelSection>

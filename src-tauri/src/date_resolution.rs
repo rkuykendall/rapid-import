@@ -1,5 +1,5 @@
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::filename_patterns::match_filename;
 
@@ -12,7 +12,7 @@ const XMP_CONFIDENCE: f32 = 0.9;
 const FS_CREATED_CONFIDENCE: f32 = 0.3;
 const FS_MODIFIED_CONFIDENCE: f32 = 0.2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DateSource {
     Exif,
@@ -39,12 +39,16 @@ impl DateSource {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DateCandidate {
     pub date: NaiveDateTime,
     pub source: DateSource,
     pub confidence: f32,
-    pub pattern_name: Option<&'static str>,
+    // Owned (not `&'static str`, unlike `filename_patterns::MatchResult`)
+    // so a `PlanItem` round-trips through the frontend intact — the UI
+    // sends the scanned `Plan` back as-is (only `excluded` may have
+    // changed) when the user commits it.
+    pub pattern_name: Option<String>,
 }
 
 /// Inputs already read into memory for one file — no filesystem or Tauri
@@ -103,7 +107,7 @@ pub fn resolve(inputs: &DateInputs, now: NaiveDate) -> DateResolution {
             date: m.date,
             source: DateSource::Filename,
             confidence: m.confidence,
-            pattern_name: Some(m.pattern_name),
+            pattern_name: Some(m.pattern_name.to_string()),
         });
     }
     if let Some(date) = inputs.fs_created.filter(|d| is_plausible(*d, now)) {

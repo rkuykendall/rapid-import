@@ -8,4 +8,5 @@ export enum Invokes {
   SaveProfileForDestination = 'save_profile_for_destination',
   ListProfiles = 'list_profiles',
   RefreshLibraryIndex = 'refresh_library_index',
+  CommitPlan = 'commit_plan',
 }

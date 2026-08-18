@@ -21,6 +21,15 @@ pub fn default_db_path() -> anyhow::Result<PathBuf> {
     Ok(app_dir.join("library.sqlite"))
 }
 
+/// Where `commit::commit_plan` writes its per-batch undo manifests — a
+/// sibling of `library.sqlite` in the same app-data directory, so both live
+/// together and `commit::undo_batch` can find a manifest purely from the
+/// path `db::insert_batch` recorded for it.
+pub fn default_undo_log_dir() -> anyhow::Result<PathBuf> {
+    let data_dir = dirs::data_dir().ok_or_else(|| anyhow::anyhow!("could not determine the OS data directory"))?;
+    Ok(data_dir.join(APP_IDENTIFIER).join("undo-logs"))
+}
+
 /// Schema from execution-plan.md §5.
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS files (

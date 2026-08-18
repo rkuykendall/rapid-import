@@ -9,6 +9,7 @@ import LeftPanel from './components/panel/LeftPanel';
 import PlanTable from './components/panel/PlanTable';
 import SummaryPanel, { DuplicatePolicy, TransferMode } from './components/panel/SummaryPanel';
 import { useScan } from './hooks/useScan';
+import { useCommit } from './hooks/useCommit';
 import { useFolderTemplatePreview } from './hooks/useFolderTemplatePreview';
 import { useDestinationProfile } from './hooks/useDestinationProfile';
 import { useProfiles } from './hooks/useProfiles';
@@ -45,18 +46,18 @@ export default function App() {
     DEFAULT_FOLDER_TEMPLATE,
   );
   const { plan, duplicates, scannedFor, loading, error, scannedCount, scan, toggleExcluded } = useScan();
+  const { committing, error: commitError, summary: commitSummary, commit, resetSummary } = useCommit();
   const templatePreview = useFolderTemplatePreview(folderTemplate);
   const { profiles, refresh: refreshProfiles } = useProfiles();
-  // Not yet wired to a Tauri command — `commit_plan` isn't exposed to the
-  // UI at all yet, so this is inert until that lands. Kept as raw state
-  // (not reset) so a choice made while reorganizing survives toggling
-  // out and back in, but "duplicates_folder" only ever applies while
-  // actually reorganizing — see `effectiveDuplicatePolicy` below.
+  // Kept as raw state (not reset) so a choice made while reorganizing
+  // survives toggling out and back in, but "duplicates_folder" only ever
+  // applies while actually reorganizing — see `effectiveDuplicatePolicy`
+  // below.
   const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>('skip');
-  // Same story: inert until `commit_plan` is wired up. Always freely
-  // pickable (unlike duplicate policy above) — it just re-defaults to
-  // Move whenever `isReorganizeInPlace` flips true and Copy when it flips
-  // false, via the effect below, rather than being forced either way.
+  // Always freely pickable (unlike duplicate policy above) — it just
+  // re-defaults to Move whenever `isReorganizeInPlace` flips true and Copy
+  // when it flips false, via the effect below, rather than being forced
+  // either way.
   const [transferMode, setTransferMode] = useState<TransferMode>('copy');
   const leftPanel = useResizablePanel(320, 'left');
   const rightPanel = useResizablePanel(320, 'right');
@@ -87,6 +88,25 @@ export default function App() {
     await save(sourceRoot);
     refreshProfiles();
     scan(sourceRoot, destinationRoot, folderTemplate);
+  };
+
+  // Re-scans after a successful commit rather than clearing the plan —
+  // moved/copied items settle into `no_op`/`already_imported`, so the same
+  // Plan table view keeps working as a live "what's left" picture instead
+  // of dropping the user back to an empty state.
+  const handleCommit = async () => {
+    if (!plan) return;
+    resetSummary();
+    const result = await commit(
+      plan,
+      destinationRoot,
+      effectiveDuplicatePolicy,
+      transferMode,
+      isReorganizeInPlace ? 'reorganize' : 'import',
+    );
+    if (result) {
+      scan(sourceRoot, destinationRoot, folderTemplate);
+    }
   };
 
   // Re-default Transfer to Move the moment source/destination start
@@ -158,6 +178,10 @@ export default function App() {
                 transferMode={transferMode}
                 onTransferModeChange={setTransferMode}
                 destinationRoot={destinationRoot}
+                committing={committing}
+                commitError={commitError}
+                commitSummary={commitSummary}
+                onCommit={handleCommit}
               />
             </Panel>
           </div>

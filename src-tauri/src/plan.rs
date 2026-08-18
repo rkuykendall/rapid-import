@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDateTime;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::date_resolution::DateCandidate;
 use crate::profiles::ConflictPolicy;
@@ -12,7 +12,7 @@ use crate::profiles::ConflictPolicy;
 /// against real test libraries.
 pub const NEEDS_REVIEW_THRESHOLD: f32 = 0.7;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictKind {
     None,
@@ -27,7 +27,7 @@ pub enum ConflictKind {
     DuplicateInPlan,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanItem {
     pub source_path: PathBuf,
     /// Full candidate list, best-first, so the review UI can show alternates.
@@ -96,7 +96,7 @@ impl PlanItem {
     }
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Plan {
     pub items: Vec<PlanItem>,
 }

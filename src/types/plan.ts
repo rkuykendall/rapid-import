@@ -37,3 +37,15 @@ export interface Plan {
 export interface DuplicateGroup {
   members: string[];
 }
+
+// Mirrors src-tauri/src/commit.rs's `CommitSummary` — the outcome of
+// actually executing a `Plan` against disk via `commit_plan`.
+export interface CommitSummary {
+  batch_id: number;
+  moved: number;
+  already_in_place: number;
+  already_imported: number;
+  duplicate_at_destination: number;
+  skipped: number;
+  excluded: number;
+}
