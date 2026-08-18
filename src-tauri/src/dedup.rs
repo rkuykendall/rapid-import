@@ -51,16 +51,17 @@ pub fn hamming_distance(a: &str, b: &str) -> Option<u32> {
     Some(hash_a.dist(&hash_b))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "distance")]
 pub enum DuplicateKind {
     /// Identical content hash.
     Exact,
     /// Different bytes, perceptual hash within `NEAR_DUPLICATE_MAX_DISTANCE`
     /// — re-exports, edited copies, burst sequences.
-    Near { distance: u32 },
+    Near(u32),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DuplicateGroup {
     pub kind: DuplicateKind,
     pub members: Vec<PathBuf>,
@@ -82,7 +83,7 @@ fn compare(a: HashRef, b: HashRef) -> Option<DuplicateGroup> {
     }
     let distance = hamming_distance(a.perceptual_hash?, b.perceptual_hash?)?;
     (distance <= NEAR_DUPLICATE_MAX_DISTANCE).then(|| DuplicateGroup {
-        kind: DuplicateKind::Near { distance },
+        kind: DuplicateKind::Near(distance),
         members: vec![a.path.to_path_buf(), b.path.to_path_buf()],
     })
 }
@@ -338,7 +339,7 @@ mod tests {
         let groups = find_duplicates(&conn, &items);
 
         assert_eq!(groups.len(), 1);
-        assert!(matches!(groups[0].kind, DuplicateKind::Near { .. }));
+        assert!(matches!(groups[0].kind, DuplicateKind::Near(_)));
     }
 
     #[test]

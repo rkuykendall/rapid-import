@@ -3,8 +3,19 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rapid_import_core::{db, plan, plan::Plan, profiles, scan};
+use rapid_import_core::{db, dedup, plan, plan::Plan, profiles, scan};
 use tauri::{Emitter, Manager};
+
+/// `scan_source`'s response: the plan itself, plus every exact/near-
+/// duplicate pairing `dedup::find_duplicates` found (against the rest of
+/// the scan and against the persistent index). Bundled into the one
+/// round-trip rather than a separate command/invoke, since the frontend
+/// always wants both together right after a scan.
+#[derive(serde::Serialize)]
+struct ScanResult {
+    plan: Plan,
+    duplicates: Vec<dedup::DuplicateGroup>,
+}
 
 /// Emit a `scan-progress` event at most this often, to avoid flooding the
 /// frontend with an IPC message per file on a large library.
@@ -50,7 +61,7 @@ async fn scan_source(
     source_root: String,
     destination_root: String,
     folder_template: String,
-) -> Result<Plan, String> {
+) -> Result<ScanResult, String> {
     let progress_handle = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
@@ -62,11 +73,13 @@ async fn scan_source(
             now: chrono::Local::now().date_naive(),
             index: Some(&conn),
         };
-        Ok(scan::scan_with_progress(&options, |count| {
+        let plan = scan::scan_with_progress(&options, |count| {
             if count % SCAN_PROGRESS_EVERY == 0 {
                 let _ = progress_handle.emit("scan-progress", count);
             }
-        }))
+        });
+        let duplicates = dedup::find_duplicates(&conn, &plan.items);
+        Ok(ScanResult { plan, duplicates })
     })
     .await
     .map_err(|e| e.to_string())?

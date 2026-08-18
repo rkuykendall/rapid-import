@@ -42,7 +42,7 @@ export default function App() {
     destinationRoot,
     DEFAULT_FOLDER_TEMPLATE,
   );
-  const { plan, scannedFor, loading, error, scannedCount, scan } = useScan();
+  const { plan, duplicates, scannedFor, loading, error, scannedCount, scan, toggleExcluded } = useScan();
   const templatePreview = useFolderTemplatePreview(folderTemplate);
   const { profiles, refresh: refreshProfiles } = useProfiles();
   // Not yet wired to a Tauri command — `commit_plan` isn't exposed to the
@@ -136,8 +136,10 @@ export default function App() {
               ) : (
                 <PlanTable
                   plan={plan}
+                  duplicates={duplicates}
                   sourceRoot={scannedFor?.sourceRoot ?? ''}
                   destinationRoot={scannedFor?.destinationRoot ?? ''}
+                  onToggleExcluded={toggleExcluded}
                 />
               )}
             </div>

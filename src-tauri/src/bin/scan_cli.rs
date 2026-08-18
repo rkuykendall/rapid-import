@@ -94,7 +94,7 @@ fn main() -> ExitCode {
             for group in &duplicates {
                 let kind_str = match group.kind {
                     DuplicateKind::Exact => "EXACT".to_string(),
-                    DuplicateKind::Near { distance } => format!("NEAR (distance {distance})"),
+                    DuplicateKind::Near(distance) => format!("NEAR (distance {distance})"),
                 };
                 let members: Vec<String> = group.members.iter().map(|p| p.display().to_string()).collect();
                 println!("  [{kind_str}] {}", members.join("  <->  "));
