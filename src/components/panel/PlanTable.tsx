@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import Text from "../ui/Text";
 import Dropdown from "../ui/Dropdown";
+import PanelHeader from "../ui/PanelHeader";
 import { TextVariants } from "../../types/typography";
 import { Plan, PlanItem, DuplicateGroup } from "../../types/plan";
 
@@ -231,17 +232,20 @@ export default function PlanTable({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="p-3 shrink-0 flex justify-between items-center border-b border-surface gap-4">
-        <Text variant={TextVariants.headline}>Plan</Text>
-        {plan && (
-          <Dropdown
-            className="w-48 shrink-0"
-            value={statusFilter}
-            onChange={(value) => setStatusFilter(value)}
-            options={STATUS_FILTER_OPTIONS}
-          />
-        )}
-      </div>
+      <PanelHeader
+        actions={
+          plan && (
+            <Dropdown
+              className="w-48 shrink-0"
+              value={statusFilter}
+              onChange={(value) => setStatusFilter(value)}
+              options={STATUS_FILTER_OPTIONS}
+            />
+          )
+        }
+      >
+        Plan
+      </PanelHeader>
 
       {!plan ? (
         <div className="flex-1 flex items-center justify-center">

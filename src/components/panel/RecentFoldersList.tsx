@@ -2,6 +2,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import clsx from 'clsx';
 import { Folder, FolderPlus } from 'lucide-react';
 import Text from '../ui/Text';
+import SectionLabel from '../ui/SectionLabel';
 import { TextVariants } from '../../types/typography';
 
 export interface RecentFolderItem {
@@ -60,9 +61,7 @@ export default function RecentFoldersList({
 
       <div className="h-px bg-border-color my-1" />
 
-      <Text variant={TextVariants.small} className="px-1.5 uppercase tracking-wide">
-        {label}
-      </Text>
+      <SectionLabel className="px-1.5">{label}</SectionLabel>
 
       <div className="max-h-52 overflow-y-auto flex flex-col gap-0.5">
         {items.length === 0 && (

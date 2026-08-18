@@ -3,6 +3,8 @@ import TitleBar from './window/TitleBar';
 import Text from './components/ui/Text';
 import Resizer, { Orientation } from './components/ui/Resizer';
 import GlobalTooltip from './components/ui/GlobalTooltip';
+import Panel from './components/ui/Panel';
+import PanelHeader from './components/ui/PanelHeader';
 import LeftPanel from './components/panel/LeftPanel';
 import PlanTable from './components/panel/PlanTable';
 import SummaryPanel, { DuplicatePolicy, TransferMode } from './components/panel/SummaryPanel';
@@ -103,10 +105,7 @@ export default function App() {
         </div>
         <div className="flex-1 flex flex-col min-h-0 p-2 gap-2">
           <div className="flex flex-row flex-grow h-full min-h-0">
-            <div
-              className="flex-shrink-0 bg-bg-secondary rounded-lg overflow-hidden"
-              style={{ width: leftPanel.width }}
-            >
+            <Panel className="flex-shrink-0" style={{ width: leftPanel.width }}>
               <LeftPanel
                 profiles={profiles}
                 activeDestinationRoot={destinationRoot}
@@ -119,16 +118,14 @@ export default function App() {
                 onFolderTemplateChange={setFolderTemplate}
                 templatePreview={templatePreview}
               />
-            </div>
+            </Panel>
 
             <Resizer direction={Orientation.Vertical} onMouseDown={leftPanel.onResizeStart} />
 
-            <div className="flex-1 flex flex-col min-w-0 bg-bg-secondary rounded-lg overflow-hidden">
+            <Panel className="flex-1 flex flex-col min-w-0">
               {!hasDestination ? (
                 <>
-                  <div className="p-3 shrink-0 flex justify-between items-center border-b border-surface gap-4">
-                    <Text variant={TextVariants.headline}>Plan</Text>
-                  </div>
+                  <PanelHeader>Plan</PanelHeader>
                   <div className="flex-1 flex items-center justify-center">
                     <Text variant={TextVariants.body}>Select or add a destination on the left to get started.</Text>
                   </div>
@@ -142,14 +139,11 @@ export default function App() {
                   onToggleExcluded={toggleExcluded}
                 />
               )}
-            </div>
+            </Panel>
 
             <Resizer direction={Orientation.Vertical} onMouseDown={rightPanel.onResizeStart} />
 
-            <div
-              className="flex-shrink-0 bg-bg-secondary rounded-lg overflow-hidden"
-              style={{ width: rightPanel.width }}
-            >
+            <Panel className="flex-shrink-0" style={{ width: rightPanel.width }}>
               <SummaryPanel
                 plan={plan}
                 canScan={canScan}
@@ -164,7 +158,7 @@ export default function App() {
                 transferMode={transferMode}
                 onTransferModeChange={setTransferMode}
               />
-            </div>
+            </Panel>
           </div>
         </div>
       </div>

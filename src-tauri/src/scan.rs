@@ -50,9 +50,50 @@ pub fn scan_with_progress(options: &ScanOptions, mut on_item: impl FnMut(usize))
         on_item(items.len());
     }
 
+    align_sidecars_with_primary(&mut items);
     flag_conflicts(&mut items);
 
     Plan { items }
+}
+
+/// Sidecars (`.xmp`, `.rrdata`, `.rrexif`, a paired RAW+JPEG, ...) are
+/// resolved above using their *own* metadata — usually just their own
+/// filesystem timestamp, since a sidecar rarely carries EXIF/XMP of its
+/// own. That produces a technically-real but irrelevant low-confidence date
+/// for a file that never actually moves on its own: `commit_plan` always
+/// relocates a sidecar into its primary's destination folder (see
+/// `commit.rs`'s grouping), regardless of what date this scan resolved for
+/// it individually. Left uncorrected, the preview plan shows a sidecar with
+/// a bogus destination and a false "needs review" flag for a decision that
+/// isn't actually its own — exactly the confusion this pass exists to
+/// prevent, by making every group's siblings inherit the primary's
+/// destination, candidates, and review status before anything is displayed
+/// or committed.
+fn align_sidecars_with_primary(items: &mut [PlanItem]) {
+    for group in crate::plan::group_associated_indices(items) {
+        let [primary_index, siblings @ ..] = group.as_slice() else {
+            continue;
+        };
+        if siblings.is_empty() {
+            continue;
+        }
+
+        let primary = &items[*primary_index];
+        let Some(primary_folder) = primary.destination_path.as_deref().and_then(Path::parent) else {
+            continue;
+        };
+        let primary_folder = primary_folder.to_path_buf();
+        let primary_candidates = primary.candidates.clone();
+        let primary_needs_review = primary.needs_review;
+
+        for &sibling_index in siblings {
+            if let Some(filename) = items[sibling_index].source_path.file_name() {
+                items[sibling_index].destination_path = Some(primary_folder.join(filename));
+            }
+            items[sibling_index].candidates = primary_candidates.clone();
+            items[sibling_index].needs_review = primary_needs_review;
+        }
+    }
 }
 
 fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
@@ -418,6 +459,56 @@ mod tests {
         assert_eq!(
             item.destination_path.as_ref().unwrap(),
             &destination.path().join("2023/2023-08-15/DSC00001.CR3")
+        );
+    }
+
+    #[test]
+    fn rrdata_sidecar_inherits_its_primarys_destination_and_review_status() {
+        // The real-world bug this covers: a RapidRAW `.rrdata` edit-history
+        // sidecar has no EXIF/XMP of its own, only its own (irrelevant)
+        // filesystem timestamp — which on its own would resolve to a
+        // low-confidence "needs review" date wildly unrelated to the photo
+        // it travels with. It should instead just follow the primary.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        fs::write(
+            source.path().join("IMG_20230815_141523.CR2"),
+            b"raw bytes",
+        )
+        .unwrap();
+        fs::write(
+            source.path().join("IMG_20230815_141523.CR2.rrdata"),
+            b"{}",
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let primary = find(&plan, "IMG_20230815_141523.CR2");
+        assert!(!primary.needs_review);
+
+        let sidecar = find(&plan, "IMG_20230815_141523.CR2.rrdata");
+        assert!(
+            !sidecar.needs_review,
+            "sidecar should inherit the primary's review status, not its own fs-time guess"
+        );
+        assert_eq!(
+            sidecar.chosen().map(|c| (c.date, c.source, c.confidence)),
+            primary.chosen().map(|c| (c.date, c.source, c.confidence)),
+            "sidecar should inherit the primary's resolved date"
+        );
+        assert_eq!(
+            sidecar.destination_path.as_ref().unwrap(),
+            &destination.path().join("2023/2023-08-15/IMG_20230815_141523.CR2.rrdata"),
+            "sidecar should land next to its primary, not wherever its own timestamp resolves to"
         );
     }
 

@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDateTime;
 use serde::Serialize;
@@ -95,6 +96,45 @@ pub struct Plan {
 /// gives users a real, authoritative doc page to check against.
 pub fn render_template(template: &str, date: NaiveDateTime) -> String {
     date.format(template).to_string()
+}
+
+/// Groups item indices sharing a source parent directory + associated-file
+/// key (`crate::formats::associated_file_key`) — e.g. `IMG_0001.CR3` /
+/// `IMG_0001.JPG` / `IMG_0001.xmp` / `IMG_0001.CR3.rrdata`. Each group is
+/// returned primary-first: the member with the highest-confidence resolved
+/// date, which is also the member whose destination folder the whole group
+/// (siblings included) actually lands in at commit time — see
+/// `commit.rs`'s `commit_group`. Items with no resolvable date at all (no
+/// destination) are dropped entirely; there's nothing to group them by, and
+/// they can never be anyone's primary or sibling.
+///
+/// Shared by `commit.rs` (deciding where a group's files actually move) and
+/// `scan.rs` (reconciling a sidecar's *previewed* destination/review status
+/// with the primary it will actually follow) so the two can never disagree
+/// about which files belong to which group.
+pub fn group_associated_indices(items: &[PlanItem]) -> Vec<Vec<usize>> {
+    let mut by_key: HashMap<(PathBuf, String), Vec<usize>> = HashMap::new();
+    for (index, item) in items.iter().enumerate() {
+        if item.destination_path.is_none() {
+            continue;
+        }
+        let parent = item.source_path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+        let key = crate::formats::associated_file_key(&item.source_path);
+        by_key.entry((parent, key)).or_default().push(index);
+    }
+
+    by_key
+        .into_values()
+        .map(|mut indices| {
+            indices.sort_by(|&a, &b| {
+                let confidence_of = |i: usize| items[i].chosen().map(|c| c.confidence).unwrap_or(0.0);
+                confidence_of(b)
+                    .partial_cmp(&confidence_of(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            indices
+        })
+        .collect()
 }
 
 #[cfg(test)]

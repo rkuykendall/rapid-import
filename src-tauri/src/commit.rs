@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -184,34 +183,18 @@ struct FileGroup<'a> {
 /// Groups items sharing a source parent directory + filename stem
 /// (case-insensitive), e.g. `IMG_0001.CR3` / `IMG_0001.JPG` / `IMG_0001.xmp`.
 /// The group's primary is whichever member has the highest-confidence
-/// resolved date; its destination folder wins for the whole group. Items
-/// with no resolvable date at all (no destination) are excluded — nothing
-/// to compute a destination from.
+/// resolved date; its destination folder wins for the whole group. Delegates
+/// to `plan::group_associated_indices` — the same grouping `scan.rs` uses to
+/// reconcile a sidecar's previewed destination, so the plan a user reviews
+/// never disagrees with what actually happens here.
 fn group_by_associated_stem(items: &[PlanItem]) -> Vec<FileGroup<'_>> {
-    let mut by_key: HashMap<(PathBuf, String), Vec<&PlanItem>> = HashMap::new();
-    for item in items {
-        if item.destination_path.is_none() {
-            continue;
-        }
-        let parent = item.source_path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
-        let key = crate::formats::associated_file_key(&item.source_path);
-        by_key.entry((parent, key)).or_default().push(item);
-    }
-
-    by_key
-        .into_values()
-        .map(|mut members| {
-            members.sort_by(|a, b| {
-                let confidence_of = |item: &&PlanItem| item.chosen().map(|c| c.confidence).unwrap_or(0.0);
-                confidence_of(b)
-                    .partial_cmp(&confidence_of(a))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            let primary = members.remove(0);
-            FileGroup {
-                primary,
-                siblings: members,
-            }
+    crate::plan::group_associated_indices(items)
+        .into_iter()
+        .map(|indices| {
+            let mut indices = indices.into_iter();
+            let primary = &items[indices.next().expect("group is never empty")];
+            let siblings = indices.map(|i| &items[i]).collect();
+            FileGroup { primary, siblings }
         })
         .collect()
 }

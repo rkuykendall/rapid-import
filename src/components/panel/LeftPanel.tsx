@@ -4,6 +4,8 @@ import { ExternalLink } from "lucide-react";
 import Input from "../ui/Input";
 import Text from "../ui/Text";
 import Switch from "../ui/Switch";
+import PanelHeader from "../ui/PanelHeader";
+import PanelSection from "../ui/PanelSection";
 import RecentFoldersList, { RecentFolderItem } from "./RecentFoldersList";
 import { TextVariants } from "../../types/typography";
 import { Profile } from "../../types/profile";
@@ -82,9 +84,7 @@ export default function LeftPanel({
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-3 shrink-0 flex justify-between items-center border-b border-surface gap-4">
-        <Text variant={TextVariants.title}>Setup</Text>
-      </div>
+      <PanelHeader>Setup</PanelHeader>
 
       <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
         <RecentFoldersList
@@ -119,13 +119,7 @@ export default function LeftPanel({
               </div>
             </div>
 
-            <div className="border-t border-border-color/50 p-3 flex-shrink-0 flex flex-col gap-1">
-              <Text
-                variant={TextVariants.small}
-                className="uppercase tracking-wide"
-              >
-                Folder template
-              </Text>
+            <PanelSection label="Folder template">
               <Input
                 value={folderTemplate}
                 onChange={(e) => onFolderTemplateChange(e.target.value)}
@@ -145,7 +139,7 @@ export default function LeftPanel({
                 chrono format reference
                 <ExternalLink size={12} />
               </button>
-            </div>
+            </PanelSection>
           </>
         )}
       </div>

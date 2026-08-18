@@ -2,6 +2,8 @@ import { Import, Loader2, Search } from "lucide-react";
 import Button from "../ui/Button";
 import Text from "../ui/Text";
 import Dropdown from "../ui/Dropdown";
+import PanelHeader from "../ui/PanelHeader";
+import PanelSection from "../ui/PanelSection";
 import { TextVariants } from "../../types/typography";
 import { Plan } from "../../types/plan";
 
@@ -89,9 +91,7 @@ export default function SummaryPanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-3 shrink-0 flex justify-between items-center border-b border-surface gap-4">
-        <Text variant={TextVariants.title}>Summary</Text>
-      </div>
+      <PanelHeader>Summary</PanelHeader>
 
       <div className="flex-grow overflow-y-auto p-4">
         {!stats ? (
@@ -113,30 +113,24 @@ export default function SummaryPanel({
         )}
       </div>
 
-      <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-1.5">
-        <Text variant={TextVariants.small} className="uppercase tracking-wide">
-          Transfer
-        </Text>
+      <PanelSection label="Transfer">
         <Dropdown
           value={transferMode}
           onChange={onTransferModeChange}
           options={TRANSFER_MODE_OPTIONS}
         />
-      </div>
+      </PanelSection>
 
-      <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-1.5">
-        <Text variant={TextVariants.small} className="uppercase tracking-wide">
-          Duplicates
-        </Text>
+      <PanelSection label="Duplicates">
         <Dropdown
           disabled={!isReorganizeInPlace}
           value={duplicatePolicy}
           onChange={onDuplicatePolicyChange}
           options={DUPLICATE_POLICY_OPTIONS}
         />
-      </div>
+      </PanelSection>
 
-      <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-2">
+      <PanelSection>
         {isPlanCurrent ? (
           <Button disabled className="w-full" data-tooltip="Coming soon">
             <Import size={16} />
@@ -164,7 +158,7 @@ export default function SummaryPanel({
             {error}
           </Text>
         )}
-      </div>
+      </PanelSection>
     </div>
   );
 }
