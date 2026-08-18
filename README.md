@@ -51,10 +51,13 @@ cargo clippy --all-targets    # lint (kept warning-free)
 
 There's also a standalone CLI for exercising the scan/plan engine without
 the UI at all — useful for a quick dry-run against a real folder, or for
-debugging the engine in isolation:
+debugging the engine in isolation. Both binaries always read/write the same
+`library.sqlite` the app itself uses (see above), so a reindex or dry run
+from the CLI is visible to the app, and vice versa:
 
 ```bash
-cargo run --bin scan_cli -- <source_dir> <destination_dir> [folder_template] [index_db_path]
+cargo run --bin scan_cli -- <source_dir> <destination_dir> [folder_template]
+cargo run --bin reindex_cli -- <destination_dir> [scope_subfolder]
 ```
 
 Frontend type-checking (not run automatically by `npm run build`, same as
@@ -85,6 +88,7 @@ npm run tauri build
   profiles.rs                -- saved import profiles
   main.rs                     -- Tauri app: AppState + commands
   bin/scan_cli.rs              -- standalone dry-run CLI
+  bin/reindex_cli.rs            -- standalone library-index CLI
 /src
   components/                -- FolderPicker, PlanItemRow, ui/ primitives
   hooks/                      -- useScan

@@ -1,5 +1,5 @@
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Local;
@@ -14,21 +14,30 @@ const DEFAULT_FOLDER_TEMPLATE: &str = "%Y/%Y-%m-%d";
 /// Minimal dry-run harness for the scan/plan engine, per execution-plan.md
 /// §9 phase 2 ("exposed via a CLI or minimal test harness before the UI
 /// exists"). Read-only: prints the plan, writes nothing.
+///
+/// Always cross-checks against the same `library.sqlite` the app itself
+/// uses (`db::default_db_path`) — there's no separate/offline mode, so a
+/// dry run here sees exactly what a real scan in the UI would.
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let (Some(source), Some(destination)) = (args.next(), args.next()) else {
-        eprintln!("usage: scan_cli <source_dir> <destination_dir> [folder_template] [index_db_path]");
+        eprintln!("usage: scan_cli <source_dir> <destination_dir> [folder_template]");
         eprintln!("  default folder_template: {DEFAULT_FOLDER_TEMPLATE}");
-        eprintln!("  index_db_path: optional SQLite index to cross-check for already-imported files");
         return ExitCode::FAILURE;
     };
     let folder_template = args.next().unwrap_or_else(|| DEFAULT_FOLDER_TEMPLATE.to_string());
-    let index_path = args.next();
 
-    let conn = match index_path.as_deref().map(|p| db::open(Path::new(p))).transpose() {
+    let db_path = match db::default_db_path() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("failed to resolve index db path: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let conn = match db::open(&db_path) {
         Ok(conn) => conn,
         Err(e) => {
-            eprintln!("failed to open index db: {e}");
+            eprintln!("failed to open index db at {}: {e}", db_path.display());
             return ExitCode::FAILURE;
         }
     };
@@ -38,7 +47,7 @@ fn main() -> ExitCode {
         destination_root: &PathBuf::from(destination),
         folder_template: &folder_template,
         now: Local::now().date_naive(),
-        index: conn.as_ref(),
+        index: Some(&conn),
     };
 
     let mut items = scan(&options).items;
@@ -87,16 +96,14 @@ fn main() -> ExitCode {
         );
     }
 
-    if let Some(conn) = conn.as_ref() {
-        let duplicates = dedup::find_duplicates(conn, &items);
-        if !duplicates.is_empty() {
-            println!("Duplicate groups:");
-            for group in &duplicates {
-                let members: Vec<String> = group.members.iter().map(|p| p.display().to_string()).collect();
-                println!("  {}", members.join("  <->  "));
-            }
-            println!();
+    let duplicates = dedup::find_duplicates(&conn, &items);
+    if !duplicates.is_empty() {
+        println!("Duplicate groups:");
+        for group in &duplicates {
+            let members: Vec<String> = group.members.iter().map(|p| p.display().to_string()).collect();
+            println!("  {}", members.join("  <->  "));
         }
+        println!();
     }
 
     let total = items.len();

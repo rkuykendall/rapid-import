@@ -2881,6 +2881,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "chrono",
+ "dirs",
  "kamadak-exif",
  "rayon",
  "regex",

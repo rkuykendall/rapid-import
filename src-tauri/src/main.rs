@@ -208,9 +208,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&app_data_dir)?;
-            let db_path = app_data_dir.join("library.sqlite");
+            let db_path = db::default_db_path()?;
             let conn = db::open(&db_path)?;
             app.manage(AppState { db: Mutex::new(conn), db_path });
             Ok(())

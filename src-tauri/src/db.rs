@@ -1,6 +1,25 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
+
+/// The bundle identifier from `tauri.conf.json` — mirrored here so the
+/// standalone CLI binaries (which have no Tauri `App` to resolve
+/// `app.path().app_data_dir()` through) land on the exact same
+/// `library.sqlite` the running app uses, rather than a separate one.
+const APP_IDENTIFIER: &str = "com.rkuykendall.rapidimport";
+
+/// The on-disk location of `library.sqlite` — `dirs::data_dir()` resolves to
+/// the same per-OS base Tauri's `app_data_dir()` uses (macOS: `~/Library/
+/// Application Support`, Windows: `%APPDATA%`, Linux: `$XDG_DATA_HOME` or
+/// `~/.local/share`), joined with the app identifier exactly like
+/// `main.rs`'s setup hook does. Creates the directory if it doesn't exist
+/// yet, same as that setup hook.
+pub fn default_db_path() -> anyhow::Result<PathBuf> {
+    let data_dir = dirs::data_dir().ok_or_else(|| anyhow::anyhow!("could not determine the OS data directory"))?;
+    let app_dir = data_dir.join(APP_IDENTIFIER);
+    std::fs::create_dir_all(&app_dir)?;
+    Ok(app_dir.join("library.sqlite"))
+}
 
 /// Schema from execution-plan.md §5.
 const SCHEMA_SQL: &str = r#"
