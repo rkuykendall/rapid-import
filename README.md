@@ -12,8 +12,9 @@ in the other. It's a separate project with no shared code or release
 cycle — only the patterns are shared.
 
 **Status: pre-alpha, local development only.** The core engine (scan, date
-resolution, dedup, commit/undo) is solid and well-tested; the UI currently
-has one working screen (dry-run scan preview). No releases yet.
+resolution, dedup, commit/undo) is solid and well-tested, and the UI now
+covers the full loop — scan a source into a dry-run plan, review it, then
+Import to actually move/copy files to the destination. No releases yet.
 
 ## Prerequisites
 
@@ -71,28 +72,4 @@ npx tsc --noEmit
 
 ```bash
 npm run tauri build
-```
-
-## Project layout
-
-```
-/src-tauri/src
-  date_resolution.rs   -- multi-source capture-date resolution engine
-  filename_patterns.rs -- filename date-pattern table
-  scan.rs               -- recursive walk + dry-run plan builder
-  plan.rs                -- Plan/PlanItem types, folder-template rendering
-  commit.rs               -- the only module that writes to disk; undo log
-  dedup.rs                 -- BLAKE3 exact-duplicate detection
-  sidecar_interop.rs        -- read-only .xmp sidecar parsing
-  db.rs                      -- SQLite schema + queries
-  profiles.rs                -- saved import profiles
-  main.rs                     -- Tauri app: AppState + commands
-  bin/scan_cli.rs              -- standalone dry-run CLI
-  bin/reindex_cli.rs            -- standalone library-index CLI
-/src
-  components/                -- FolderPicker, PlanItemRow, ui/ primitives
-  hooks/                      -- useScan
-  types/                      -- TS mirrors of the Rust core's Serialize types
-  utils/                      -- themes, Invokes command-name enum
-  window/                     -- custom TitleBar
 ```
