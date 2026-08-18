@@ -1,22 +1,25 @@
-import { Import, Loader2, Search } from 'lucide-react';
-import Button from '../ui/Button';
-import Text from '../ui/Text';
-import Dropdown from '../ui/Dropdown';
-import { TextVariants } from '../../types/typography';
-import { Plan } from '../../types/plan';
+import { Import, Loader2, Search } from "lucide-react";
+import Button from "../ui/Button";
+import Text from "../ui/Text";
+import Dropdown from "../ui/Dropdown";
+import { TextVariants } from "../../types/typography";
+import { Plan } from "../../types/plan";
 
-export type DuplicatePolicy = 'skip' | 'duplicates_folder';
+export type DuplicatePolicy = "skip" | "duplicates_folder";
 
-const DUPLICATE_POLICY_OPTIONS: Array<{ value: DuplicatePolicy; label: string }> = [
-  { value: 'skip', label: 'Skip (leave in place)' },
-  { value: 'duplicates_folder', label: 'Move to Duplicates folder' },
+const DUPLICATE_POLICY_OPTIONS: Array<{
+  value: DuplicatePolicy;
+  label: string;
+}> = [
+  { value: "skip", label: "Skip (leave in place)" },
+  { value: "duplicates_folder", label: "Move to Duplicates folder" },
 ];
 
-export type TransferMode = 'copy' | 'move';
+export type TransferMode = "copy" | "move";
 
 const TRANSFER_MODE_OPTIONS: Array<{ value: TransferMode; label: string }> = [
-  { value: 'copy', label: 'Copy (leave source untouched)' },
-  { value: 'move', label: 'Move (remove from source)' },
+  { value: "copy", label: "Copy (leave source untouched)" },
+  { value: "move", label: "Move (remove from source)" },
 ];
 
 interface StatRowProps {
@@ -41,9 +44,15 @@ function summarize(plan: Plan) {
     total: items.length,
     alreadyOrganized: items.filter((i) => i.no_op).length,
     alreadyImported: items.filter((i) => i.already_imported).length,
-    duplicateAtDestination: items.filter((i) => i.conflict === 'duplicate_at_destination').length,
+    duplicateAtDestination: items.filter(
+      (i) => i.conflict === "duplicate_at_destination",
+    ).length,
     needsReview: items.filter((i) => i.needs_review).length,
-    conflicts: items.filter((i) => i.conflict === 'destination_exists' || i.conflict === 'duplicate_in_plan').length,
+    conflicts: items.filter(
+      (i) =>
+        i.conflict === "destination_exists" ||
+        i.conflict === "duplicate_in_plan",
+    ).length,
   };
 }
 
@@ -80,19 +89,24 @@ export default function SummaryPanel({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-3 flex justify-between items-center shrink-0 border-b border-surface">
+      <div className="p-3 shrink-0 flex justify-between items-center border-b border-surface gap-4">
         <Text variant={TextVariants.title}>Summary</Text>
       </div>
 
       <div className="flex-grow overflow-y-auto p-4">
         {!stats ? (
-          <Text variant={TextVariants.body}>Run a scan to see a plan summary.</Text>
+          <Text variant={TextVariants.body}>
+            Run a scan to see a plan summary.
+          </Text>
         ) : (
           <div className="flex flex-col divide-y divide-border-color">
             <StatRow label="Files scanned" value={stats.total} />
             <StatRow label="Already organized" value={stats.alreadyOrganized} />
             <StatRow label="Already imported" value={stats.alreadyImported} />
-            <StatRow label="Duplicate at destination" value={stats.duplicateAtDestination} />
+            <StatRow
+              label="Duplicate at destination"
+              value={stats.duplicateAtDestination}
+            />
             <StatRow label="Needs review" value={stats.needsReview} />
             <StatRow label="Conflicts" value={stats.conflicts} />
           </div>
@@ -103,18 +117,23 @@ export default function SummaryPanel({
         <Text variant={TextVariants.small} className="uppercase tracking-wide">
           Transfer
         </Text>
-        <Dropdown value={transferMode} onChange={onTransferModeChange} options={TRANSFER_MODE_OPTIONS} />
+        <Dropdown
+          value={transferMode}
+          onChange={onTransferModeChange}
+          options={TRANSFER_MODE_OPTIONS}
+        />
       </div>
 
       <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-1.5">
         <Text variant={TextVariants.small} className="uppercase tracking-wide">
           Duplicates
         </Text>
-        {isReorganizeInPlace ? (
-          <Dropdown value={duplicatePolicy} onChange={onDuplicatePolicyChange} options={DUPLICATE_POLICY_OPTIONS} />
-        ) : (
-          <Text variant={TextVariants.body}>Skip (leave in place) — the standard for a plain import.</Text>
-        )}
+        <Dropdown
+          disabled={!isReorganizeInPlace}
+          value={duplicatePolicy}
+          onChange={onDuplicatePolicyChange}
+          options={DUPLICATE_POLICY_OPTIONS}
+        />
       </div>
 
       <div className="p-3 border-t border-surface shrink-0 flex flex-col gap-2">
@@ -124,9 +143,19 @@ export default function SummaryPanel({
             Import
           </Button>
         ) : (
-          <Button onClick={onScan} disabled={!canScan || loading} className="w-full">
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-            {loading ? `Scanning… ${scannedCount} file${scannedCount === 1 ? '' : 's'} so far` : 'Scan'}
+          <Button
+            onClick={onScan}
+            disabled={!canScan || loading}
+            className="w-full"
+          >
+            {loading ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Search size={16} />
+            )}
+            {loading
+              ? `Scanning… ${scannedCount} file${scannedCount === 1 ? "" : "s"} so far`
+              : "Scan"}
           </Button>
         )}
 

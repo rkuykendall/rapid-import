@@ -1,19 +1,20 @@
-import { useMemo } from 'react';
-import { openUrl } from '@tauri-apps/plugin-opener';
-import { ExternalLink } from 'lucide-react';
-import Input from '../ui/Input';
-import Text from '../ui/Text';
-import Switch from '../ui/Switch';
-import RecentFoldersList, { RecentFolderItem } from './RecentFoldersList';
-import { TextVariants } from '../../types/typography';
-import { Profile } from '../../types/profile';
+import { useMemo } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { ExternalLink } from "lucide-react";
+import Input from "../ui/Input";
+import Text from "../ui/Text";
+import Switch from "../ui/Switch";
+import RecentFoldersList, { RecentFolderItem } from "./RecentFoldersList";
+import { TextVariants } from "../../types/typography";
+import { Profile } from "../../types/profile";
 
-const CHRONO_STRFTIME_DOCS_URL = 'https://docs.rs/chrono/latest/chrono/format/strftime/index.html';
+const CHRONO_STRFTIME_DOCS_URL =
+  "https://docs.rs/chrono/latest/chrono/format/strftime/index.html";
 
 function folderName(path: string): string {
   return (
     path
-      .split('/')
+      .split("/")
       .filter((part) => part.length > 0)
       .pop() ?? path
   );
@@ -22,7 +23,10 @@ function folderName(path: string): string {
 // Distinct, order-preserving folder paths pulled from a `Profile` field —
 // shared by both the Destinations and Source recents lists, since both are
 // just "every distinct root we've ever seen in `profiles`."
-function distinctFolders(profiles: Profile[], field: 'source_root' | 'destination_root'): RecentFolderItem[] {
+function distinctFolders(
+  profiles: Profile[],
+  field: "source_root" | "destination_root",
+): RecentFolderItem[] {
   const seen = new Set<string>();
   const items: RecentFolderItem[] = [];
   for (const profile of profiles) {
@@ -67,12 +71,18 @@ export default function LeftPanel({
   onFolderTemplateChange,
   templatePreview,
 }: LeftPanelProps) {
-  const destinationItems = useMemo(() => distinctFolders(profiles, 'destination_root'), [profiles]);
-  const sourceItems = useMemo(() => distinctFolders(profiles, 'source_root'), [profiles]);
+  const destinationItems = useMemo(
+    () => distinctFolders(profiles, "destination_root"),
+    [profiles],
+  );
+  const sourceItems = useMemo(
+    () => distinctFolders(profiles, "source_root"),
+    [profiles],
+  );
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-3 flex justify-between items-center shrink-0 border-b border-surface">
+      <div className="p-3 shrink-0 flex justify-between items-center border-b border-surface gap-4">
         <Text variant={TextVariants.title}>Setup</Text>
       </div>
 
@@ -110,12 +120,21 @@ export default function LeftPanel({
             </div>
 
             <div className="border-t border-border-color/50 p-3 flex-shrink-0 flex flex-col gap-1">
-              <Text variant={TextVariants.small} className="uppercase tracking-wide">
+              <Text
+                variant={TextVariants.small}
+                className="uppercase tracking-wide"
+              >
                 Folder template
               </Text>
-              <Input value={folderTemplate} onChange={(e) => onFolderTemplateChange(e.target.value)} />
+              <Input
+                value={folderTemplate}
+                onChange={(e) => onFolderTemplateChange(e.target.value)}
+              />
               <Text variant={TextVariants.small}>
-                Preview: <span className="text-text-primary">{templatePreview || '—'}</span>
+                Preview:{" "}
+                <span className="text-text-primary">
+                  {templatePreview || "—"}
+                </span>
               </Text>
               <button
                 type="button"
