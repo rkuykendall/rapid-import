@@ -3,6 +3,7 @@
 // call sites get autocomplete instead of stringly-typed invoke() calls.
 export enum Invokes {
   ScanSource = 'scan_source',
+  RetemplatePlan = 'retemplate_plan',
   PreviewFolderTemplate = 'preview_folder_template',
   LoadProfileForDestination = 'load_profile_for_destination',
   SaveProfileForDestination = 'save_profile_for_destination',

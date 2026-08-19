@@ -63,6 +63,34 @@ export function useScan() {
     }
   }, []);
 
+  // The "Apply" button next to the folder template editor — re-renders the
+  // existing plan's destination paths against a new template without
+  // re-walking the source tree (see `scan::retemplate_plan`). Always
+  // relative to `scannedFor`'s source/destination, not whatever's currently
+  // sitting in the (possibly since-edited) source/destination fields, since
+  // that's what the displayed plan was actually scanned for. Updates
+  // `scannedFor.folderTemplate` to match so `isPlanCurrent` (in App.tsx)
+  // recognizes the plan as current again instead of still prompting Scan.
+  const retemplate = useCallback(
+    async (folderTemplate: string) => {
+      if (!plan || !scannedFor) return;
+      setError(null);
+      try {
+        const updated = await invoke<Plan>(Invokes.RetemplatePlan, {
+          plan,
+          sourceRoot: scannedFor.sourceRoot,
+          destinationRoot: scannedFor.destinationRoot,
+          folderTemplate,
+        });
+        setPlan(updated);
+        setScannedFor({ ...scannedFor, folderTemplate });
+      } catch (err) {
+        setError(String(err));
+      }
+    },
+    [plan, scannedFor],
+  );
+
   // Client-side only — `excluded` just governs what `commit_plan` skips at
   // commit time (see `commit.rs`'s `commit_item`, checked ahead of any
   // conflict handling), so there's nothing to recompute or re-invoke here.
@@ -77,5 +105,5 @@ export function useScan() {
     });
   }, []);
 
-  return { plan, duplicates, scannedFor, loading, error, scannedCount, scan, toggleExcluded };
+  return { plan, duplicates, scannedFor, loading, error, scannedCount, scan, retemplate, toggleExcluded };
 }

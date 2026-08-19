@@ -45,7 +45,7 @@ export default function App() {
     destinationRoot,
     DEFAULT_FOLDER_TEMPLATE,
   );
-  const { plan, duplicates, scannedFor, loading, error, scannedCount, scan, toggleExcluded } = useScan();
+  const { plan, duplicates, scannedFor, loading, error, scannedCount, scan, retemplate, toggleExcluded } = useScan();
   const { committing, error: commitError, summary: commitSummary, commit, resetSummary } = useCommit();
   const templatePreview = useFolderTemplatePreview(folderTemplate);
   const { profiles, refresh: refreshProfiles } = useProfiles();
@@ -83,6 +83,18 @@ export default function App() {
     scannedFor.sourceRoot === sourceRoot &&
     scannedFor.destinationRoot === destinationRoot &&
     scannedFor.folderTemplate === folderTemplate;
+  // Apply only makes sense once there's a plan to retemplate and the editor
+  // actually disagrees with what it was last rendered against — otherwise
+  // there's nothing for it to do.
+  const canApplyTemplate =
+    plan !== null &&
+    scannedFor !== null &&
+    folderTemplate.trim() !== '' &&
+    folderTemplate !== scannedFor.folderTemplate;
+
+  const handleApplyTemplate = () => {
+    retemplate(folderTemplate);
+  };
 
   // Persist the moment a source is picked (dialog, recents click, or the
   // reorganize toggle) rather than waiting for Scan — otherwise a freshly
@@ -150,6 +162,8 @@ export default function App() {
                 folderTemplate={folderTemplate}
                 onFolderTemplateChange={setFolderTemplate}
                 templatePreview={templatePreview}
+                canApplyTemplate={canApplyTemplate}
+                onApplyTemplate={handleApplyTemplate}
               />
             </Panel>
 

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, RefreshCw } from "lucide-react";
+import Button from "../ui/Button";
 import Input from "../ui/Input";
 import Text from "../ui/Text";
 import Switch from "../ui/Switch";
@@ -52,6 +53,8 @@ interface LeftPanelProps {
   folderTemplate: string;
   onFolderTemplateChange(value: string): void;
   templatePreview: string;
+  canApplyTemplate: boolean;
+  onApplyTemplate(): void;
 }
 
 // Owns the whole left column. Destinations and Source are the same
@@ -72,6 +75,8 @@ export default function LeftPanel({
   folderTemplate,
   onFolderTemplateChange,
   templatePreview,
+  canApplyTemplate,
+  onApplyTemplate,
 }: LeftPanelProps) {
   const destinationItems = useMemo(
     () => distinctFolders(profiles, "destination_root"),
@@ -138,6 +143,14 @@ export default function LeftPanel({
                 chrono format reference
                 <ExternalLink size={12} />
               </button>
+              <Button
+                onClick={onApplyTemplate}
+                disabled={!canApplyTemplate}
+                className="w-full bg-surface"
+              >
+                <RefreshCw size={16} />
+                Apply
+              </Button>
             </PanelSection>
           </>
         )}

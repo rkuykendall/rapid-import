@@ -94,6 +94,35 @@ async fn scan_source(
     .map_err(|e| e.to_string())?
 }
 
+/// Re-renders an already-scanned `Plan`'s destination paths against a new
+/// folder template — the "Apply" button next to the template editor. Reuses
+/// every item's already-resolved date/hash (see `scan::retemplate_plan`), so
+/// unlike `scan_source` this never re-walks or re-reads the source tree;
+/// still `spawn_blocking` since conflict re-flagging does real (read-only)
+/// destination-side I/O.
+#[tauri::command]
+async fn retemplate_plan(
+    app_handle: tauri::AppHandle,
+    plan: Plan,
+    source_root: String,
+    destination_root: String,
+    folder_template: String,
+) -> Result<Plan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        Ok(scan::retemplate_plan(
+            &plan,
+            Path::new(&source_root),
+            Path::new(&destination_root),
+            &folder_template,
+            Some(&conn),
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Renders `folder_template` against "now" — lets the UI show a live
 /// preview instead of us validating chrono's strftime syntax ourselves.
 /// Cheap (pure string formatting, no I/O), but still `async` per the
@@ -258,6 +287,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             scan_source,
+            retemplate_plan,
             preview_folder_template,
             load_profile_for_destination,
             save_profile_for_destination,

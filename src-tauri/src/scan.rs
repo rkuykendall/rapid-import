@@ -198,6 +198,46 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
     }
 }
 
+/// Re-renders every item's `destination_path` against a new folder
+/// template, reusing each item's already-resolved date candidates and
+/// content hash instead of re-walking/re-reading the source tree — the
+/// folder template only ever feeds `render_template`'s output, never which
+/// files exist or what date they resolve to. Still does the same read-only
+/// destination-side existence/hash checks `scan` does (via `flag_conflicts`)
+/// to keep conflict/no-op flags accurate for the *new* paths; nothing on
+/// disk is written and no source file is re-read either way.
+pub fn retemplate_plan(
+    plan: &Plan,
+    source_root: &Path,
+    destination_root: &Path,
+    folder_template: &str,
+    index: Option<&Connection>,
+) -> Plan {
+    let mut items: Vec<PlanItem> = plan
+        .items
+        .iter()
+        .cloned()
+        .map(|mut item| {
+            item.destination_path = item.chosen().map(|candidate| {
+                let rendered_folder = render_template(folder_template, candidate.date);
+                let destination_folder =
+                    preserve_existing_subfolder(&item.source_path, source_root, &rendered_folder)
+                        .unwrap_or_else(|| PathBuf::from(&rendered_folder));
+                let filename = item.source_path.file_name().unwrap_or_default();
+                destination_root.join(destination_folder).join(filename)
+            });
+            item.no_op = false;
+            item.conflict = ConflictKind::None;
+            item
+        })
+        .collect();
+
+    align_sidecars_with_primary(&mut items);
+    flag_conflicts(&mut items, index);
+
+    Plan { items }
+}
+
 /// The indexed row at this exact path, only if it's unchanged (matching
 /// size+mtime) since it was last indexed — i.e. safe to trust its stored
 /// content hash and resolved date without re-reading the file. `None` for
@@ -1128,6 +1168,143 @@ mod tests {
             NaiveDateTime::parse_from_str("2020-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S").unwrap()
         );
         assert_eq!(chosen.source, crate::date_resolution::DateSource::Exif);
+    }
+
+    #[test]
+    fn retemplate_moves_items_to_the_new_templates_folder() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("IMG_20230815_141523.jpg"), b"fixture").unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let retemplated = retemplate_plan(&plan, source.path(), destination.path(), "%Y/%m %B", None);
+
+        let item = find(&retemplated, "IMG_20230815_141523.jpg");
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &destination.path().join("2023/08 August/IMG_20230815_141523.jpg")
+        );
+    }
+
+    #[test]
+    fn retemplate_does_not_rehash_or_reread_the_source_file() {
+        // The fixture bytes aren't real EXIF, so if retemplate re-resolved
+        // the date from scratch it would fall back to a low-confidence fs
+        // time instead of reusing the original filename-derived date —
+        // proving the chosen candidate (and its source) survives untouched.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("IMG_20230815_141523.jpg"), b"fixture").unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+        let original_chosen = find(&plan, "IMG_20230815_141523.jpg")
+            .chosen()
+            .map(|c| (c.date, c.source, c.confidence));
+
+        let retemplated = retemplate_plan(&plan, source.path(), destination.path(), "%Y/%m %B", None);
+
+        assert_eq!(
+            find(&retemplated, "IMG_20230815_141523.jpg").chosen().map(|c| (c.date, c.source, c.confidence)),
+            original_chosen
+        );
+    }
+
+    #[test]
+    fn retemplate_reflags_a_conflict_that_only_exists_at_the_new_destination() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("IMG_20230815_141523.jpg"), b"fixture").unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+        assert_eq!(find(&plan, "IMG_20230815_141523.jpg").conflict, ConflictKind::None);
+
+        // Nothing collides under the original template, but something
+        // already sits at the *new* template's computed path.
+        fs::create_dir_all(destination.path().join("2023/08 August")).unwrap();
+        fs::write(
+            destination.path().join("2023/08 August/IMG_20230815_141523.jpg"),
+            b"already there",
+        )
+        .unwrap();
+
+        let retemplated = retemplate_plan(&plan, source.path(), destination.path(), "%Y/%m %B", None);
+
+        assert_eq!(
+            find(&retemplated, "IMG_20230815_141523.jpg").conflict,
+            ConflictKind::DestinationExists
+        );
+    }
+
+    #[test]
+    fn retemplate_clears_a_conflict_that_no_longer_applies_under_the_new_destination() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("IMG_20230815_141523.jpg"), b"fixture").unwrap();
+        fs::create_dir_all(destination.path().join("2023/2023-08-15")).unwrap();
+        fs::write(
+            destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg"),
+            b"already there",
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+        assert_eq!(find(&plan, "IMG_20230815_141523.jpg").conflict, ConflictKind::DestinationExists);
+
+        let retemplated = retemplate_plan(&plan, source.path(), destination.path(), "%Y/%m %B", None);
+
+        assert_eq!(find(&retemplated, "IMG_20230815_141523.jpg").conflict, ConflictKind::None);
+    }
+
+    #[test]
+    fn retemplate_keeps_a_sidecar_aligned_with_its_primary_under_the_new_template() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("IMG_20230815_141523.CR2"), b"raw bytes").unwrap();
+        fs::write(source.path().join("IMG_20230815_141523.CR2.rrdata"), b"{}").unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let retemplated = retemplate_plan(&plan, source.path(), destination.path(), "%Y/%m %B", None);
+
+        let primary = find(&retemplated, "IMG_20230815_141523.CR2");
+        let sidecar = find(&retemplated, "IMG_20230815_141523.CR2.rrdata");
+        assert_eq!(sidecar.destination_path.as_deref().and_then(Path::parent), primary.destination_path.as_deref().and_then(Path::parent));
     }
 
     #[test]
