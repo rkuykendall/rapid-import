@@ -90,7 +90,6 @@ export default function LeftPanel({
         <RecentFoldersList
           label="Destinations"
           addLabel="Add destination"
-          emptyMessage="No destinations yet — add one to get started."
           items={destinationItems}
           activeValue={activeDestinationRoot}
           onSelect={onSelectDestination}
@@ -102,7 +101,6 @@ export default function LeftPanel({
               <RecentFoldersList
                 label="Source"
                 addLabel="Add source"
-                emptyMessage="No sources yet — add one to get started."
                 items={sourceItems}
                 activeValue={sourceRoot}
                 onSelect={onSourceRootChange}
