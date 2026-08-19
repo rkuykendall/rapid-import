@@ -276,15 +276,24 @@ fn file_identity(_path: &Path, meta: &fs::Metadata) -> Option<String> {
 
 #[cfg(windows)]
 fn file_identity(path: &Path, _meta: &fs::Metadata) -> Option<String> {
-    // NB: file_index()/volume_serial_number() reportedly need a live file
-    // handle to populate reliably, not a bare fs::metadata() stat — hence
-    // re-opening here rather than reusing the caller's `meta`. Needs
-    // verification on real Windows hardware; harmless either way since a
-    // `None` here just means "no fast-path data, rehash it."
-    use std::os::windows::fs::MetadataExt;
+    // volume_serial_number()/file_index() on std's MetadataExt are gated
+    // behind the unstable `windows_by_handle` feature (rust-lang/rust#63010),
+    // so we call GetFileInformationByHandle directly instead. This needs a
+    // live file handle, not a bare fs::metadata() stat — hence re-opening
+    // here rather than reusing the caller's `meta`.
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
     let file = fs::File::open(path).ok()?;
-    let handle_meta = file.metadata().ok()?;
-    Some(format!("{}:{}", handle_meta.volume_serial_number()?, handle_meta.file_index()?))
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    let file_index = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+    Some(format!("{}:{}", info.dwVolumeSerialNumber, file_index))
 }
 
 #[cfg(not(any(unix, windows)))]
