@@ -689,6 +689,40 @@ mod tests {
     }
 
     #[test]
+    fn resolves_a_compact_video_filename_from_its_own_timestamp_not_fs_time() {
+        // Regression test for the reported bug: a file named e.g.
+        // VID20260716183013.mp4 was resolving from fs_created (today,
+        // whenever the test actually runs) instead of the date plainly
+        // encoded in its own filename, because no filename pattern covered
+        // a compact YYYYMMDDHHMMSS run with no separator between date and
+        // time. Real fs_created/fs_modified here will be "now" (whenever
+        // this test runs), never 2026-07-16 — so this only passes if the
+        // filename genuinely won.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("VID20260716183013.mp4"), b"fixture").unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let item = find(&plan, "VID20260716183013.mp4");
+        let chosen = item.chosen().unwrap();
+        assert_eq!(chosen.source, crate::date_resolution::DateSource::Filename);
+        assert_eq!(chosen.date, NaiveDate::from_ymd_opt(2026, 7, 16).unwrap().and_hms_opt(18, 30, 13).unwrap());
+        assert!(!item.needs_review);
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &destination.path().join("2026").join("2026-07-16").join("VID20260716183013.mp4")
+        );
+    }
+
+    #[test]
     fn xmp_sidecar_date_flows_through_to_the_resolved_plan() {
         // No EXIF, no filename pattern — a RAW file with only a Lightroom
         // XMP sidecar for its capture date, the exact scenario this

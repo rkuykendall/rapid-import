@@ -61,9 +61,19 @@ static PATTERNS: &[PatternDef] = &[
         matcher: match_generic_timestamp,
     },
     PatternDef {
+        name: "compact_timestamp",
+        confidence: 0.72,
+        matcher: match_compact_timestamp,
+    },
+    PatternDef {
         name: "date_only",
         confidence: 0.6,
         matcher: match_date_only,
+    },
+    PatternDef {
+        name: "compact_date_only",
+        confidence: 0.5,
+        matcher: match_compact_date_only,
     },
 ];
 
@@ -109,6 +119,48 @@ static RE_DATE_ONLY: LazyLock<Regex> =
 fn match_date_only(stem: &str) -> Option<NaiveDateTime> {
     let c = RE_DATE_ONLY.captures(stem)?;
     build_datetime(&c[1], &c[2], &c[3], None)
+}
+
+/// Matches a run of digits of exactly `len` characters — not a prefix or
+/// suffix of a longer run — by scanning every maximal digit run in the
+/// string (`\d+` is greedy, so `find_iter` never splits one run in two) and
+/// keeping the first one of the right length. The `regex` crate has no
+/// lookaround to express "not preceded/followed by a digit" directly, and a
+/// fixed-width `\d{14}` alone would happily match the first 14 digits of an
+/// 18-digit serial number; scanning whole runs instead makes that
+/// impossible — a run either *is* exactly 14 digits or it isn't matched.
+static RE_DIGIT_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").unwrap());
+fn find_digit_run(stem: &str, len: usize) -> Option<&str> {
+    RE_DIGIT_RUN.find_iter(stem).map(|m| m.as_str()).find(|run| run.len() == len)
+}
+
+/// Compact `YYYYMMDDHHMMSS` with no separators at all between date and
+/// time — e.g. Android's default video filename `VID20260716183013.mp4`.
+/// Distinct from `generic_timestamp`, which requires an underscore between
+/// the two halves; this one has nothing to anchor on but the digit count,
+/// hence the narrower `find_digit_run` helper (and the lower confidence:
+/// slightly more prone to a coincidental match than a separator-delimited
+/// pattern, though `build_datetime`'s calendar validation still rejects
+/// anything that isn't a real date).
+fn match_compact_timestamp(stem: &str) -> Option<NaiveDateTime> {
+    let run = find_digit_run(stem, 14)?;
+    let (year, rest) = run.split_at(4);
+    let (month, rest) = rest.split_at(2);
+    let (day, rest) = rest.split_at(2);
+    let (hour, rest) = rest.split_at(2);
+    let (minute, second) = rest.split_at(2);
+    build_datetime(year, month, day, Some((hour, minute, second)))
+}
+
+/// Same idea as `match_compact_timestamp` but date-only (`YYYYMMDD`, no
+/// separators, no time) — lower confidence still: an 8-digit run alone is
+/// common enough (serial numbers, sequence counters) that it's a much
+/// weaker signal than a 14-digit one.
+fn match_compact_date_only(stem: &str) -> Option<NaiveDateTime> {
+    let run = find_digit_run(stem, 8)?;
+    let (year, rest) = run.split_at(4);
+    let (month, day) = rest.split_at(2);
+    build_datetime(year, month, day, None)
 }
 
 fn build_datetime(
@@ -179,6 +231,74 @@ mod tests {
         assert_eq!(m.date, dt(2023, 8, 15, 0, 0, 0));
         assert_eq!(m.pattern_name, "date_only");
         assert_eq!(m.confidence, 0.6);
+    }
+
+    #[test]
+    fn matches_compact_timestamp() {
+        // The reported bug: Android's default video filename, date and time
+        // run together with no separator at all — generic_timestamp's `_`
+        // requirement doesn't cover this.
+        let m = match_filename("VID20260716183013.mp4").unwrap();
+        assert_eq!(m.date, dt(2026, 7, 16, 18, 30, 13));
+        assert_eq!(m.pattern_name, "compact_timestamp");
+        assert_eq!(m.confidence, 0.72);
+    }
+
+    #[test]
+    fn compact_timestamp_is_prefix_agnostic() {
+        // No hardcoded "VID" requirement — any prefix (or none) works, same
+        // as generic_timestamp already does.
+        for name in ["MVI20260716183013.MOV", "MOV20260716183013.mp4", "20260716183013.mp4"] {
+            let m = match_filename(name).unwrap();
+            assert_eq!(m.date, dt(2026, 7, 16, 18, 30, 13), "failed for {name}");
+            assert_eq!(m.pattern_name, "compact_timestamp");
+        }
+    }
+
+    #[test]
+    fn compact_timestamp_does_not_match_inside_a_longer_digit_run() {
+        // A 16-digit serial number contains a 14-digit substring that would
+        // otherwise look like a valid date+time — must not match, since a
+        // fixed-width \d{14} alone (with no lookaround available) would
+        // happily grab the first 14 of these.
+        assert!(match_filename("SN1234567890123456.jpg").is_none());
+    }
+
+    #[test]
+    fn compact_timestamp_skips_a_shorter_unrelated_digit_run_to_find_the_real_one() {
+        let m = match_filename("clip_9_20260716183013_final.mp4").unwrap();
+        assert_eq!(m.date, dt(2026, 7, 16, 18, 30, 13));
+        assert_eq!(m.pattern_name, "compact_timestamp");
+    }
+
+    #[test]
+    fn compact_timestamp_rejects_an_invalid_calendar_date() {
+        assert!(match_filename("VID20261316183013.mp4").is_none(), "month 13 isn't real");
+        assert!(match_filename("VID20260732183013.mp4").is_none(), "day 32 isn't real");
+    }
+
+    #[test]
+    fn matches_compact_date_only() {
+        let m = match_filename("VID20260716.mp4").unwrap();
+        assert_eq!(m.date, dt(2026, 7, 16, 0, 0, 0));
+        assert_eq!(m.pattern_name, "compact_date_only");
+        assert_eq!(m.confidence, 0.5);
+    }
+
+    #[test]
+    fn compact_timestamp_wins_over_compact_date_only_when_both_could_apply() {
+        // compact_timestamp is tried first, so the full 14-digit reading
+        // wins over treating just the leading 8 digits as a bare date.
+        let m = match_filename("VID20260716183013.mp4").unwrap();
+        assert_eq!(m.pattern_name, "compact_timestamp");
+    }
+
+    #[test]
+    fn generic_timestamp_still_wins_over_compact_timestamp_when_separated() {
+        // Sanity check that adding the no-separator variant didn't disturb
+        // the existing underscore-separated pattern's priority.
+        let m = match_filename("20230815_141523.jpg").unwrap();
+        assert_eq!(m.pattern_name, "generic_timestamp");
     }
 
     #[test]
