@@ -84,6 +84,19 @@ export default function App() {
     scannedFor.destinationRoot === destinationRoot &&
     scannedFor.folderTemplate === folderTemplate;
 
+  // Persist the moment a source is picked (dialog, recents click, or the
+  // reorganize toggle) rather than waiting for Scan — otherwise a freshly
+  // picked source that was never used before doesn't show up in the Source
+  // recents list until after a scan, which reads as "did that click even
+  // register?" An override is passed to `save` since `setSourceRoot` won't
+  // have landed in state yet when `save` closes over it.
+  const handleSourceRootChange = (newSourceRoot: string) => {
+    setSourceRoot(newSourceRoot);
+    if (newSourceRoot.trim() !== '') {
+      save(newSourceRoot).then(refreshProfiles);
+    }
+  };
+
   const handleScan = async () => {
     await save(sourceRoot);
     refreshProfiles();
@@ -132,7 +145,7 @@ export default function App() {
                 onSelectDestination={setDestinationRoot}
                 hasDestination={hasDestination}
                 sourceRoot={sourceRoot}
-                onSourceRootChange={setSourceRoot}
+                onSourceRootChange={handleSourceRootChange}
                 isReorganizeInPlace={isReorganizeInPlace}
                 folderTemplate={folderTemplate}
                 onFolderTemplateChange={setFolderTemplate}

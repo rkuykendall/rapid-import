@@ -109,10 +109,11 @@ export default function LeftPanel({
                 <Switch
                   label="Same as destination (reorganize)"
                   checked={isReorganizeInPlace}
-                  onChange={() => {}}
-                  disabled
+                  onChange={(checked) =>
+                    onSourceRootChange(checked ? activeDestinationRoot : '')
+                  }
                   className="w-fit gap-3"
-                  tooltip="Reflects whether the chosen source matches the destination — pick a source folder that matches to reorganize in place."
+                  tooltip="Set the source to the destination folder to reorganize it in place."
                 />
               </div>
             </div>
