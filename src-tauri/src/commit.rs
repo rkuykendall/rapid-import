@@ -466,7 +466,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
@@ -499,7 +499,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
@@ -522,7 +522,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
@@ -551,7 +551,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],
@@ -707,7 +707,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let mut dup_item = item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)]);
         dup_item.already_imported = true;
@@ -730,7 +730,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let mut excluded_item = item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)]);
         excluded_item.excluded = true;
@@ -817,7 +817,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let mut dup_item = item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)]);
         dup_item.already_imported = true;
@@ -874,7 +874,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let mut dup_item = item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)]);
         dup_item.already_imported = true;
@@ -967,7 +967,11 @@ mod tests {
             source_root: source.path(),
             destination_root: destination.path(),
             folder_template: "%Y/%Y-%m-%d",
-            now: chrono::NaiveDate::from_ymd_opt(2026, 8, 18).unwrap(),
+            // Must be the real current date, not a fixed calendar date: this
+            // test's IMG_0001.CR3/.xmp fall back to their real fs mtime
+            // (see the comment below), which `is_plausible` rejects as
+            // "future" against any `now` that's already in the past.
+            now: chrono::Local::now().date_naive(),
             index: Some(&conn),
         };
         let scanned = crate::scan::scan(&scan_options);
@@ -979,7 +983,7 @@ mod tests {
         let summary = commit_plan(&plan, &options(&conn, undo_dir.path(), destination.path())).unwrap();
 
         assert_eq!(summary.moved, 3);
-        assert!(destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg").exists());
+        assert!(destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg").exists());
         // IMG_0001.CR3/.xmp have no filename-derived date, so they fall back
         // to fs mtime (today, whenever the test runs) rather than 2023 — the
         // point here is just that the sidecar followed its primary's folder.
@@ -1004,7 +1008,7 @@ mod tests {
 
         let src_path = source.path().join("IMG_20230815_141523.jpg");
         fs::write(&src_path, b"fixture").unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_path = destination.path().join("2023").join("2023-08-15").join("IMG_20230815_141523.jpg");
 
         let plan = Plan {
             items: vec![item(src_path.clone(), Some(dest_path.clone()), vec![candidate(2023, 8, 15, 0.85)])],

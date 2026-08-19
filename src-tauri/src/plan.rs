@@ -111,8 +111,27 @@ pub struct Plan {
 /// would silently show up as literal text in the folder name instead of
 /// erroring. Delegating to chrono directly gets the full spec for free and
 /// gives users a real, authoritative doc page to check against.
+///
+/// Users write `/` as the folder separator regardless of platform (every
+/// example in the docs, and every template we ship, does) — chrono has no
+/// idea that's meaningful and emits it as a literal character, so on
+/// Windows the rendered string would otherwise mix `/` from the template
+/// with `\` from every later `PathBuf::join`. That mismatch is harmless for
+/// `Path`/`PathBuf` equality (component-wise, separator-insensitive) but
+/// corrupts anything that compares or stores the *string* form — e.g. the
+/// `current_path` index lookups `scan.rs` relies on to skip re-hashing an
+/// unchanged file, which silently stop matching once a real (all-`\`)
+/// filesystem walk is compared against an indexed row saved with a
+/// (mixed-`/`-and-`\`) templated path. Normalizing here, once, means every
+/// downstream `PathBuf::join`/string conversion is separator-consistent
+/// from the start; a no-op on platforms where `/` already is native.
 pub fn render_template(template: &str, date: NaiveDateTime) -> String {
-    date.format(template).to_string()
+    let rendered = date.format(template).to_string();
+    if std::path::MAIN_SEPARATOR == '/' {
+        rendered
+    } else {
+        rendered.replace('/', std::path::MAIN_SEPARATOR_STR)
+    }
 }
 
 /// Groups item indices sharing a source parent directory + associated-file
@@ -166,13 +185,22 @@ mod tests {
     #[test]
     fn renders_yyyy_mm_dd_folder_template() {
         let rendered = render_template("%Y/%Y-%m-%d", dt(2023, 8, 15));
-        assert_eq!(rendered, "2023/2023-08-15");
+        assert_eq!(rendered, format!("2023{sep}2023-08-15", sep = std::path::MAIN_SEPARATOR));
     }
 
     #[test]
     fn renders_month_name_template() {
         let rendered = render_template("%Y/%m - %B", dt(2023, 8, 15));
-        assert_eq!(rendered, "2023/08 - August");
+        assert_eq!(rendered, format!("2023{sep}08 - August", sep = std::path::MAIN_SEPARATOR));
+    }
+
+    #[test]
+    fn a_template_separator_that_is_already_native_is_unaffected() {
+        // On Unix this is the same case as the two tests above (`/` already
+        // is native); on Windows it proves a template segment that doesn't
+        // itself contain a separator is left alone.
+        let rendered = render_template("%Y", dt(2023, 8, 15));
+        assert_eq!(rendered, "2023");
     }
 
     fn item(destination_path: Option<PathBuf>) -> PlanItem {

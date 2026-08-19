@@ -363,8 +363,9 @@ mod tests {
         index_library(&db_path(&db_dir), &options).unwrap();
         let original_hash = all_rows(&db_path(&db_dir))[0].content_hash.clone();
 
-        fs::create_dir_all(library.path().join("2023/2023-08-15")).unwrap();
-        let moved = library.path().join("2023/2023-08-15/a.jpg");
+        let moved_folder = library.path().join("2023").join("2023-08-15");
+        fs::create_dir_all(&moved_folder).unwrap();
+        let moved = moved_folder.join("a.jpg");
         fs::rename(&original, &moved).unwrap();
 
         let summary = index_library(&db_path(&db_dir), &options).unwrap();

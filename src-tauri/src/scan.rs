@@ -584,8 +584,9 @@ mod tests {
         fs::write(&source_path, b"source bytes").unwrap();
         let source_hash = dedup::content_hash(&source_path).unwrap();
 
-        fs::create_dir_all(destination.path().join("2023/2023-08-15")).unwrap();
-        let dest_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        let dest_folder = destination.path().join("2023").join("2023-08-15");
+        fs::create_dir_all(&dest_folder).unwrap();
+        let dest_path = dest_folder.join("IMG_20230815_141523.jpg");
         fs::write(&dest_path, b"different bytes actually on disk at the destination").unwrap();
         let dest_meta = fs::metadata(&dest_path).unwrap();
 
