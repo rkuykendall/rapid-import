@@ -42,9 +42,10 @@ fn main() -> ExitCode {
         }
     };
 
+    let destination_root = PathBuf::from(destination);
     let options = ScanOptions {
         source_root: &PathBuf::from(source),
-        destination_root: &PathBuf::from(destination),
+        destination_root: &destination_root,
         folder_template: &folder_template,
         now: Local::now().date_naive(),
         index: Some(&conn),
@@ -96,7 +97,7 @@ fn main() -> ExitCode {
         );
     }
 
-    let duplicates = dedup::find_duplicates(&conn, &items);
+    let duplicates = dedup::find_duplicates(&conn, &items, &destination_root);
     if !duplicates.is_empty() {
         println!("Duplicate groups:");
         for group in &duplicates {

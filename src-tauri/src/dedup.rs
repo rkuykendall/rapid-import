@@ -60,7 +60,15 @@ pub struct DuplicateGroup {
 /// of the whole `files` table compared in Rust. Cost scales with what's
 /// actually being scanned, not with how large the library's import history
 /// has grown.
-pub fn find_duplicates(conn: &rusqlite::Connection, items: &[PlanItem]) -> Vec<DuplicateGroup> {
+///
+/// Index-side matches are further filtered to paths under `destination_root`
+/// — `library.sqlite` is one global index shared across every destination
+/// this app has ever scanned, so without this filter a scan of source A into
+/// destination B could report a "duplicate" that only actually exists under
+/// some unrelated destination C, which has nothing to do with this scan.
+/// Same-scan pairwise matches (the first loop below) need no such filter —
+/// every member there is already a file in *this* scan by construction.
+pub fn find_duplicates(conn: &rusqlite::Connection, items: &[PlanItem], destination_root: &Path) -> Vec<DuplicateGroup> {
     let mut by_hash: HashMap<&str, Vec<&Path>> = HashMap::new();
     for item in items {
         if let Some(hash) = item.content_hash.as_deref() {
@@ -83,6 +91,9 @@ pub fn find_duplicates(conn: &rusqlite::Connection, items: &[PlanItem]) -> Vec<D
         for &source_path in paths {
             for indexed_path in &indexed_paths {
                 if *indexed_path == source_path.to_string_lossy() {
+                    continue;
+                }
+                if !Path::new(indexed_path).starts_with(destination_root) {
                     continue;
                 }
                 groups.push(DuplicateGroup { members: vec![source_path.to_path_buf(), PathBuf::from(indexed_path)] });
@@ -151,7 +162,9 @@ mod tests {
 
         let conn = crate::db::open_in_memory().unwrap();
         let items = vec![plan_item(a.clone()), plan_item(b.clone())];
-        let groups = find_duplicates(&conn, &items);
+        // Same-scan pairwise matches don't consult the index at all, so the
+        // destination_root passed here is irrelevant to this case.
+        let groups = find_duplicates(&conn, &items, dir.path());
 
         assert_eq!(groups.len(), 1);
         assert!(groups[0].members.contains(&a) && groups[0].members.contains(&b));
@@ -190,11 +203,54 @@ mod tests {
         .unwrap();
 
         let items = vec![plan_item(scanned.clone())];
-        let groups = find_duplicates(&conn, &items);
+        // The indexed match lives under /library - pass that as the scan's
+        // destination_root so it's in scope for the match.
+        let groups = find_duplicates(&conn, &items, Path::new("/library"));
 
         assert_eq!(groups.len(), 1);
         assert!(groups[0].members.contains(&scanned));
         assert!(groups[0].members.contains(&PathBuf::from("/library/2023/2023-08-15/existing.jpg")));
+    }
+
+    #[test]
+    fn index_matches_outside_destination_root_are_not_reported() {
+        // library.sqlite is one global index shared across every destination
+        // this app has ever scanned - a match under some unrelated
+        // destination shouldn't surface as a "duplicate" for this scan.
+        let dir = tempfile::tempdir().unwrap();
+        let scanned = dir.path().join("scanned.jpg");
+        fs::write(&scanned, b"already imported bytes").unwrap();
+
+        let conn = crate::db::open_in_memory().unwrap();
+        let batch_id = crate::db::insert_batch(
+            &conn,
+            &crate::db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "import".to_string(),
+                undo_log_path: "/tmp/undo.json".to_string(),
+            },
+        )
+        .unwrap();
+        crate::db::insert_file(
+            &conn,
+            &crate::db::NewFileRecord {
+                content_hash: content_hash(&scanned).unwrap(),
+                current_path: "/some/unrelated/library/existing.jpg".to_string(),
+                capture_date: None,
+                date_source: None,
+                date_confidence: None,
+                imported_at: "2026-08-01T00:00:01".to_string(),
+                batch_id,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let items = vec![plan_item(scanned.clone())];
+        let groups = find_duplicates(&conn, &items, Path::new("/library"));
+
+        assert!(groups.is_empty(), "a match outside destination_root must not be reported");
     }
 
     #[test]
@@ -207,7 +263,7 @@ mod tests {
 
         let conn = crate::db::open_in_memory().unwrap();
         let items = vec![plan_item(a), plan_item(b)];
-        let groups = find_duplicates(&conn, &items);
+        let groups = find_duplicates(&conn, &items, dir.path());
 
         assert!(groups.is_empty());
     }

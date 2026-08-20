@@ -87,7 +87,7 @@ async fn scan_source(
                 let _ = progress_handle.emit("scan-progress", count);
             }
         });
-        let duplicates = dedup::find_duplicates(&conn, &plan.items);
+        let duplicates = dedup::find_duplicates(&conn, &plan.items, Path::new(&destination_root));
         Ok(ScanResult { plan, duplicates })
     })
     .await

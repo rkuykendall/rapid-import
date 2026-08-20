@@ -181,7 +181,7 @@ fn build_plan_item(source_path: &Path, options: &ScanOptions) -> PlanItem {
     });
 
     let (content_hash, already_imported) =
-        compute_hash(source_path, file_reader.as_mut(), indexed.as_ref(), options.index);
+        compute_hash(source_path, file_reader.as_mut(), indexed.as_ref(), options.index, options.destination_root);
 
     PlanItem {
         source_path: source_path.to_path_buf(),
@@ -267,7 +267,8 @@ fn cached_date(indexed: &Option<db::IndexedFileMeta>, label: &str) -> Option<Nai
 }
 
 /// Computes this file's content hash and whether it's already present
-/// *elsewhere* in the index — or, when possible, skips hashing entirely.
+/// *elsewhere in this destination* — or, when possible, skips hashing
+/// entirely.
 ///
 /// The fast path: `indexed` (already looked up once in `build_plan_item`
 /// via `unchanged_indexed_row`, alongside the date fast path) means this
@@ -300,13 +301,14 @@ fn compute_hash(
     file_reader: Option<&mut BufReader<fs::File>>,
     indexed: Option<&db::IndexedFileMeta>,
     index: Option<&Connection>,
+    destination_root: &Path,
 ) -> (Option<String>, bool) {
     let Some(conn) = index else {
         return (None, false);
     };
 
     if let Some(row) = indexed {
-        let already_imported = has_other_indexed_copy(conn, &row.content_hash, source_path);
+        let already_imported = has_other_indexed_copy(conn, &row.content_hash, source_path, destination_root);
         return (Some(row.content_hash.clone()), already_imported);
     }
 
@@ -321,27 +323,39 @@ fn compute_hash(
     let Some(content_hash) = content_hash else {
         return (None, false);
     };
-    let already_imported = has_other_indexed_copy(conn, &content_hash, source_path);
+    let already_imported = has_other_indexed_copy(conn, &content_hash, source_path, destination_root);
     (Some(content_hash), already_imported)
 }
 
-/// Whether `hash` is indexed at any path other than `source_path` itself —
-/// the real meaning of "already imported": genuine duplicate content
-/// elsewhere in the library, not this exact file matching its own indexed
-/// row. Every plain-import source path (an SD card) never coincides with
-/// any indexed `current_path`, so this is a no-op filter there — the fix
-/// only changes behavior for reorganize-in-place, where a file's own
-/// current path is always indexed by the time you'd want to reorganize it.
-/// Without this filter, that self-match alone used to mark nearly every
+/// Whether `hash` is indexed at any path other than `source_path` itself,
+/// *and* under `destination_root` — the real meaning of "already imported":
+/// duplicate content already in the library you're currently scanning into
+/// or reorganizing, not this exact file matching its own indexed row, and
+/// not a match against some other, unrelated destination this app has
+/// indexed at some point. `library.sqlite` is one global index shared
+/// across every destination ever scanned — without the `destination_root`
+/// filter, scanning source A into destination B could show "Already
+/// imported" for content that only actually exists under an unrelated
+/// destination C, which is misleading: nothing about *this* scan says B and
+/// C are the same library.
+///
+/// Every plain-import source path (an SD card) never coincides with any
+/// indexed `current_path`, so the self-match half of this filter is a no-op
+/// there — it only changes behavior for reorganize-in-place, where a file's
+/// own current path is always indexed by the time you'd want to reorganize
+/// it. Without it, that self-match alone used to mark nearly every
 /// already-indexed file "already imported," which at commit time made
 /// `commit::commit_item` route a misfiled-but-indexed file through
 /// `relocate_duplicate` — a no-op under the default `DuplicatePolicy::Skip`
 /// — instead of actually moving it to its correct folder.
-fn has_other_indexed_copy(conn: &Connection, hash: &str, source_path: &Path) -> bool {
+fn has_other_indexed_copy(conn: &Connection, hash: &str, source_path: &Path, destination_root: &Path) -> bool {
     db::find_paths_by_content_hash(conn, hash)
         .unwrap_or_default()
         .iter()
-        .any(|indexed_path| Path::new(indexed_path) != source_path)
+        .any(|indexed_path| {
+            let indexed_path = Path::new(indexed_path);
+            indexed_path != source_path && indexed_path.starts_with(destination_root)
+        })
 }
 
 fn read_exif_date<R: BufRead + Seek>(reader: &mut R) -> Option<NaiveDateTime> {
@@ -1030,11 +1044,15 @@ mod tests {
         )
         .unwrap();
         let hash = dedup::content_hash(&source.path().join("IMG_20230815_141523.jpg")).unwrap();
+        // Under destination.path(), not some unrelated hardcoded path -
+        // already_imported is scoped to matches under this scan's own
+        // destination_root, not the whole global index.
+        let indexed_path = destination.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
         db::insert_file(
             &conn,
             &db::NewFileRecord {
                 content_hash: hash,
-                current_path: "/library/2023/2023-08-15/IMG_20230815_141523.jpg".to_string(),
+                current_path: indexed_path.to_string_lossy().to_string(),
                 capture_date: Some("2023-08-15T14:15:23".to_string()),
                 date_source: Some("exif".to_string()),
                 date_confidence: Some(0.95),
@@ -1197,6 +1215,62 @@ mod tests {
         let item = find(&plan, "IMG_20230815_141523.jpg");
 
         assert!(item.already_imported, "a second copy at a different path is a genuine duplicate");
+    }
+
+    #[test]
+    fn already_imported_ignores_a_match_outside_this_scans_destination_root() {
+        // library.sqlite is one global index shared across every destination
+        // this app has ever scanned. A source file scanned into destination
+        // A shouldn't come back "already imported" just because its content
+        // happens to also live under some unrelated destination B - that
+        // match has nothing to do with the library this scan is actually
+        // working with.
+        let source = tempfile::tempdir().unwrap();
+        let destination_a = tempfile::tempdir().unwrap();
+        let destination_b = tempfile::tempdir().unwrap();
+        let scanned = source.path().join("IMG_20230815_141523.jpg");
+        fs::write(&scanned, b"fixture bytes").unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "import".to_string(),
+                undo_log_path: "/tmp/undo.json".to_string(),
+            },
+        )
+        .unwrap();
+        db::insert_file(
+            &conn,
+            &db::NewFileRecord {
+                content_hash: dedup::content_hash(&scanned).unwrap(),
+                current_path: destination_b.path().join("existing.jpg").to_string_lossy().to_string(),
+                capture_date: None,
+                date_source: None,
+                date_confidence: None,
+                imported_at: "2026-08-01T00:00:01".to_string(),
+                batch_id,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination_a.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+        let item = find(&plan, "IMG_20230815_141523.jpg");
+
+        assert!(
+            !item.already_imported,
+            "a match under an unrelated destination must not count as already imported here"
+        );
     }
 
     #[test]
