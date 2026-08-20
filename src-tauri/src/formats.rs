@@ -14,8 +14,15 @@ const RAW_EXTENSIONS: &[&str] = &[
     "ptx", "srw", "x3f", "arw", "srf", "sr2",
 ];
 
-/// Non-RAW image formats, from RapidRAW's `NON_RAW_EXTENSIONS`.
-const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "exr", "qoi"];
+/// Non-RAW image formats, from RapidRAW's `NON_RAW_EXTENSIONS`, plus
+/// `heic`/`heif` — not in RapidRAW's own list (it doesn't decode them for
+/// editing), but the default capture format on every iPhone since iOS 11, so
+/// a plain import tool has to recognize them even without a preview/edit
+/// story. `kamadak-exif` (the crate `scan.rs` already reads EXIF through)
+/// parses ISOBMFF/HEIF containers natively, so `DateTimeOriginal` resolution
+/// works the same as it does for JPEG — no separate code path needed, just
+/// admitting the extension here.
+const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "exr", "qoi", "heic", "heif"];
 
 /// RapidRAW doesn't handle video at all, so this list has no upstream
 /// counterpart — it's just the common camera/phone container formats.
@@ -116,6 +123,8 @@ mod tests {
             "IMG_0001.xmp",
             "IMG_0001.CR3.rrdata",
             "IMG_0001.CR3.rrexif",
+            "IMG_0001.HEIC",
+            "IMG_0001.heif",
         ] {
             assert!(is_supported_media_file(Path::new(name)), "{name} should be supported");
         }

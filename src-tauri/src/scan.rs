@@ -1398,4 +1398,150 @@ mod tests {
             "the filename pattern should still win fresh, even though the EXIF/XMP read was skipped"
         );
     }
+
+    // Minimal ISOBMFF/HEIF file wrapping a hand-built TIFF/Exif blob with a
+    // single DateTimeOriginal tag, built the same way kamadak-exif's own
+    // isobmff.rs test suite constructs its fixtures (see `unknown_before_ftyp`
+    // in that crate). A real HEIC photo isn't practical to author or vendor
+    // into this repo just for a test fixture, but the container format
+    // itself is simple enough to build directly here — which also proves
+    // this app's own `read_exif_date` actually drives the exif crate's
+    // ISOBMFF path correctly, not just that the crate supports it in the
+    // abstract.
+    fn u32be(n: u32) -> [u8; 4] {
+        n.to_be_bytes()
+    }
+
+    fn minimal_heic_with_date_time_original(date_time: &str) -> Vec<u8> {
+        assert_eq!(date_time.len(), 19, "expected YYYY:MM:DD HH:MM:SS");
+        let mut value = date_time.as_bytes().to_vec();
+        value.push(0); // NUL-terminated ASCII, per the Exif spec
+
+        // --- TIFF/Exif blob: header, IFD0 (just an ExifIFDPointer), the
+        // Exif SubIFD (just DateTimeOriginal), then the string itself.
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"MM"); // big-endian
+        tiff.extend_from_slice(&[0x00, 0x2a]); // TIFF magic
+        tiff.extend_from_slice(&u32be(8)); // offset of IFD0
+
+        let ifd0_offset = 8u32;
+        let exif_subifd_offset = ifd0_offset + 2 + 12 + 4; // count + 1 entry + next-IFD offset
+        tiff.extend_from_slice(&(1u16).to_be_bytes()); // IFD0: 1 entry
+        tiff.extend_from_slice(&(0x8769u16).to_be_bytes()); // tag: ExifIFDPointer
+        tiff.extend_from_slice(&(4u16).to_be_bytes()); // type: LONG
+        tiff.extend_from_slice(&u32be(1)); // count
+        tiff.extend_from_slice(&u32be(exif_subifd_offset)); // value: offset to Exif SubIFD
+        tiff.extend_from_slice(&u32be(0)); // no next IFD
+
+        let value_offset = exif_subifd_offset + 2 + 12 + 4;
+        assert_eq!(tiff.len() as u32, exif_subifd_offset, "offset arithmetic must match actual position");
+        tiff.extend_from_slice(&(1u16).to_be_bytes()); // Exif SubIFD: 1 entry
+        tiff.extend_from_slice(&(0x9003u16).to_be_bytes()); // tag: DateTimeOriginal
+        tiff.extend_from_slice(&(2u16).to_be_bytes()); // type: ASCII
+        tiff.extend_from_slice(&u32be(value.len() as u32)); // count, incl. NUL
+        tiff.extend_from_slice(&u32be(value_offset)); // value: offset to the string
+        tiff.extend_from_slice(&u32be(0)); // no next IFD
+        assert_eq!(tiff.len() as u32, value_offset, "offset arithmetic must match actual position");
+        tiff.extend_from_slice(&value);
+
+        // --- ISOBMFF container: ftyp (declares HEIF-compatible), then a
+        // meta box holding one "Exif" item (iinf/iloc/idat), pointing at the
+        // TIFF blob above.
+        let mut ftyp_body = Vec::new();
+        ftyp_body.extend_from_slice(b"heic"); // major brand
+        ftyp_body.extend_from_slice(&u32be(0)); // minor version
+        ftyp_body.extend_from_slice(b"mif1"); // compatible brand kamadak-exif checks for
+        let ftyp = boxed(b"ftyp", &ftyp_body);
+
+        // Item id is arbitrary - iloc and infe just need to agree.
+        let item_id: u16 = 1;
+
+        let mut infe_body = Vec::new();
+        infe_body.extend_from_slice(&[0x02, 0, 0, 0]); // fullbox version=2, flags=0
+        infe_body.extend_from_slice(&item_id.to_be_bytes()); // item_id (version 2 -> u16)
+        infe_body.extend_from_slice(&[0, 0]); // item_protection_index
+        infe_body.extend_from_slice(b"Exif"); // item_type
+        let infe = boxed(b"infe", &infe_body);
+
+        let mut iinf_body = Vec::new();
+        iinf_body.extend_from_slice(&[0, 0, 0, 0]); // fullbox version=0, flags=0
+        iinf_body.extend_from_slice(&(1u16).to_be_bytes()); // entry_count
+        iinf_body.extend_from_slice(&infe);
+        let iinf = boxed(b"iinf", &iinf_body);
+
+        // version=1, every size field zeroed -> one extent covering the
+        // whole idat box's content (see kamadak-exif's isobmff.rs: a zero
+        // `len` means "read idat to the end", not "read zero bytes").
+        let mut iloc_body = Vec::new();
+        iloc_body.extend_from_slice(&[0x01, 0, 0, 0]); // fullbox version=1, flags=0
+        iloc_body.extend_from_slice(&[0, 0]); // offset/length/base_offset/index sizes, all 0
+        iloc_body.extend_from_slice(&(1u16).to_be_bytes()); // item_count
+        iloc_body.extend_from_slice(&item_id.to_be_bytes());
+        iloc_body.extend_from_slice(&[0, 0x01]); // construction_method=1 (idat-based)
+        iloc_body.extend_from_slice(&[0, 0]); // data_ref_index
+        iloc_body.extend_from_slice(&(1u16).to_be_bytes()); // extent_count
+        let iloc = boxed(b"iloc", &iloc_body);
+
+        // The Exif item's own data block: a 4-byte "offset to TIFF header"
+        // prefix (0 - no padding here) followed by the TIFF blob itself.
+        let mut idat_body = Vec::new();
+        idat_body.extend_from_slice(&u32be(0));
+        idat_body.extend_from_slice(&tiff);
+        let idat = boxed(b"idat", &idat_body);
+
+        let mut meta_body = Vec::new();
+        meta_body.extend_from_slice(&[0, 0, 0, 0]); // fullbox version=0, flags=0
+        meta_body.extend_from_slice(&iloc);
+        meta_body.extend_from_slice(&iinf);
+        meta_body.extend_from_slice(&idat);
+        let meta = boxed(b"meta", &meta_body);
+
+        let mut file = Vec::new();
+        file.extend_from_slice(&ftyp);
+        file.extend_from_slice(&meta);
+        file
+    }
+
+    fn boxed(box_type: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&u32be(8 + body.len() as u32));
+        out.extend_from_slice(box_type);
+        out.extend_from_slice(body);
+        out
+    }
+
+    #[test]
+    fn heic_exif_date_flows_through_to_the_resolved_plan() {
+        // iPhones have shot HEIC by default since iOS 11 - the extension
+        // whitelist in formats.rs now admits it, but that's only half the
+        // fix: this proves an actual DateTimeOriginal embedded in a HEIC
+        // file's ISOBMFF container is read and wins over the filename/fs
+        // fallbacks, the same as it would for a JPEG.
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("IMG_0001.heic"),
+            minimal_heic_with_date_time_original("2023:08:15 14:15:23"),
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: source.path(),
+            destination_root: destination.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: None,
+        };
+        let plan = scan(&options);
+
+        let item = find(&plan, "IMG_0001.heic");
+        let chosen = item.chosen().unwrap();
+        assert_eq!(chosen.source, crate::date_resolution::DateSource::Exif);
+        assert_eq!(chosen.date, NaiveDate::from_ymd_opt(2023, 8, 15).unwrap().and_hms_opt(14, 15, 23).unwrap());
+        assert!(!item.needs_review);
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &destination.path().join("2023/2023-08-15/IMG_0001.heic")
+        );
+    }
 }
