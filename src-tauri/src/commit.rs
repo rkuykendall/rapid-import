@@ -71,10 +71,12 @@ pub struct CommitSummary {
     /// Reorganize-in-place items that were already at their correct
     /// destination — nothing to move.
     pub already_in_place: usize,
-    /// Items whose content hash already exists in the index (e.g.
-    /// re-importing from the same SD card). Left untouched at the source
-    /// under `DuplicatePolicy::Skip`; relocated into `Duplicates/` under
-    /// `DuplicatePolicy::MoveToDuplicatesFolder`.
+    /// Items whose content hash already exists in the index at some other
+    /// path (e.g. re-importing from the same SD card, or a genuine second
+    /// copy found during a reorganize-in-place pass) — never counted here
+    /// just for matching its own indexed row at its own current path. Left
+    /// untouched at the source under `DuplicatePolicy::Skip`; relocated
+    /// into `Duplicates/` under `DuplicatePolicy::MoveToDuplicatesFolder`.
     pub already_imported: usize,
     /// The destination path was already occupied, but by a byte-identical
     /// file — not caught by the index (e.g. it was never imported through
@@ -1023,4 +1025,68 @@ mod tests {
         assert!(!dest_path.exists());
         assert!(db::find_by_content_hash(&conn, &dedup::content_hash(&src_path).unwrap()).unwrap().is_none());
     }
+
+    #[test]
+    fn reorganize_in_place_actually_moves_a_misfiled_indexed_file() {
+        // End-to-end regression test for the bug scan::has_other_indexed_copy
+        // fixes: reorganizing an already-indexed library used to silently
+        // leave every misfiled file exactly where it was, because
+        // already_imported came back true just from the file matching its
+        // own indexed row — commit_item then routed it through
+        // relocate_duplicate, a no-op under the default
+        // DuplicatePolicy::Skip. This proves the real commit_plan path (not
+        // just the PlanItem flag) actually relocates it now.
+        let library = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        fs::create_dir_all(library.path().join("misc")).unwrap();
+        let misfiled = library.path().join("misc/IMG_20230815_141523.jpg");
+        fs::write(&misfiled, b"fixture bytes").unwrap();
+
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "index".to_string(),
+                undo_log_path: String::new(),
+            },
+        )
+        .unwrap();
+        let meta = fs::metadata(&misfiled).unwrap();
+        db::insert_indexed_file(
+            &conn,
+            &db::IndexedFileWrite {
+                current_path: &misfiled.to_string_lossy(),
+                content_hash: &dedup::content_hash(&misfiled).unwrap(),
+                size: Some(meta.len() as i64),
+                mtime: dedup::mtime_secs(&meta),
+                file_id: None,
+            },
+            "2026-08-01T00:00:01",
+            batch_id,
+        )
+        .unwrap();
+
+        let scan_options = crate::scan::ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: chrono::Local::now().date_naive(),
+            index: Some(&conn),
+        };
+        let plan = crate::scan::scan(&scan_options);
+
+        let mut opts = options(&conn, undo_dir.path(), library.path());
+        opts.kind = "reorganize";
+        let summary = commit_plan(&plan, &opts).unwrap();
+
+        let expected_dest = library.path().join("2023/2023-08-15/IMG_20230815_141523.jpg");
+        assert_eq!(summary.moved, 1, "the misfiled file must actually move, not be counted as already_imported");
+        assert_eq!(summary.already_imported, 0);
+        assert!(!misfiled.exists(), "no longer at the old, wrong location");
+        assert!(expected_dest.exists(), "relocated to its correct date folder");
+    }
 }
+

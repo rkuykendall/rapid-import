@@ -266,8 +266,8 @@ fn cached_date(indexed: &Option<db::IndexedFileMeta>, label: &str) -> Option<Nai
         .and_then(|date| NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%S").ok())
 }
 
-/// Computes this file's content hash and whether it's already present in
-/// the index — or, when possible, skips hashing entirely.
+/// Computes this file's content hash and whether it's already present
+/// *elsewhere* in the index — or, when possible, skips hashing entirely.
 ///
 /// The fast path: `indexed` (already looked up once in `build_plan_item`
 /// via `unchanged_indexed_row`, alongside the date fast path) means this
@@ -277,6 +277,11 @@ fn cached_date(indexed: &Option<db::IndexedFileMeta>, label: &str) -> Option<Nai
 /// plain import's source path (an SD card) never coincides with any indexed
 /// `current_path` — which is exactly the case that used to mean "rehash
 /// every file in the library, every time you click Scan."
+///
+/// Taking the fast path only tells us this file has a row at its *own*
+/// current path — during reorganize-in-place that's true for nearly every
+/// already-indexed file, misfiled or not, so it can never be trusted as
+/// "duplicate content exists" on its own (see `has_other_indexed_copy`).
 ///
 /// `dedup::find_duplicates` reuses whatever this returns rather than
 /// hashing a second time itself.
@@ -301,7 +306,8 @@ fn compute_hash(
     };
 
     if let Some(row) = indexed {
-        return (Some(row.content_hash.clone()), true);
+        let already_imported = has_other_indexed_copy(conn, &row.content_hash, source_path);
+        return (Some(row.content_hash.clone()), already_imported);
     }
 
     let content_hash = match file_reader {
@@ -315,8 +321,27 @@ fn compute_hash(
     let Some(content_hash) = content_hash else {
         return (None, false);
     };
-    let already_imported = matches!(db::find_by_content_hash(conn, &content_hash), Ok(Some(_)));
+    let already_imported = has_other_indexed_copy(conn, &content_hash, source_path);
     (Some(content_hash), already_imported)
+}
+
+/// Whether `hash` is indexed at any path other than `source_path` itself —
+/// the real meaning of "already imported": genuine duplicate content
+/// elsewhere in the library, not this exact file matching its own indexed
+/// row. Every plain-import source path (an SD card) never coincides with
+/// any indexed `current_path`, so this is a no-op filter there — the fix
+/// only changes behavior for reorganize-in-place, where a file's own
+/// current path is always indexed by the time you'd want to reorganize it.
+/// Without this filter, that self-match alone used to mark nearly every
+/// already-indexed file "already imported," which at commit time made
+/// `commit::commit_item` route a misfiled-but-indexed file through
+/// `relocate_duplicate` — a no-op under the default `DuplicatePolicy::Skip`
+/// — instead of actually moving it to its correct folder.
+fn has_other_indexed_copy(conn: &Connection, hash: &str, source_path: &Path) -> bool {
+    db::find_paths_by_content_hash(conn, hash)
+        .unwrap_or_default()
+        .iter()
+        .any(|indexed_path| Path::new(indexed_path) != source_path)
 }
 
 fn read_exif_date<R: BufRead + Seek>(reader: &mut R) -> Option<NaiveDateTime> {
@@ -1059,6 +1084,14 @@ mod tests {
         // size+mtime should be recognized as unchanged and skip hashing
         // entirely — proven here by planting a hash the real file's bytes
         // could never produce and confirming it comes back unchanged.
+        //
+        // The only indexed row here is this file's own row at its own
+        // path — no other copy exists anywhere — so already_imported must
+        // stay false. It used to come back true purely from matching
+        // itself, which silently broke reorganize-in-place: commit_item
+        // would route a misfiled-but-indexed file through
+        // relocate_duplicate (a no-op under the default
+        // DuplicatePolicy::Skip) instead of actually moving it.
         let library = tempfile::tempdir().unwrap();
         let path = library.path().join("IMG_20230815_141523.jpg");
         fs::write(&path, b"fixture bytes").unwrap();
@@ -1100,7 +1133,125 @@ mod tests {
         let item = find(&plan, "IMG_20230815_141523.jpg");
 
         assert_eq!(item.content_hash.as_deref(), Some("sentinel-hash-the-real-bytes-would-never-produce"));
-        assert!(item.already_imported);
+        assert!(!item.already_imported, "matching only its own indexed row is not a duplicate");
+    }
+
+    #[test]
+    fn already_imported_is_true_for_a_genuine_second_copy_during_reorganize() {
+        // Same fast path as the test above, but this time a *second*,
+        // different-path row shares the hash too — a real duplicate found
+        // during reorganize-in-place (e.g. the same photo already sitting
+        // under two different folder-template runs). This one must come
+        // back true.
+        let library = tempfile::tempdir().unwrap();
+        let path = library.path().join("IMG_20230815_141523.jpg");
+        fs::write(&path, b"fixture bytes").unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "index".to_string(),
+                undo_log_path: String::new(),
+            },
+        )
+        .unwrap();
+        let meta = fs::metadata(&path).unwrap();
+        db::insert_indexed_file(
+            &conn,
+            &db::IndexedFileWrite {
+                current_path: &path.to_string_lossy(),
+                content_hash: "shared-hash",
+                size: Some(meta.len() as i64),
+                mtime: dedup::mtime_secs(&meta),
+                file_id: None,
+            },
+            "2026-08-01T00:00:01",
+            batch_id,
+        )
+        .unwrap();
+        db::insert_indexed_file(
+            &conn,
+            &db::IndexedFileWrite {
+                current_path: &library.path().join("elsewhere/IMG_20230815_141523.jpg").to_string_lossy(),
+                content_hash: "shared-hash",
+                size: Some(meta.len() as i64),
+                mtime: dedup::mtime_secs(&meta),
+                file_id: None,
+            },
+            "2026-08-01T00:00:01",
+            batch_id,
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+        let item = find(&plan, "IMG_20230815_141523.jpg");
+
+        assert!(item.already_imported, "a second copy at a different path is a genuine duplicate");
+    }
+
+    #[test]
+    fn a_misfiled_indexed_file_is_still_a_pending_move_not_already_imported() {
+        // Regression test for the real bug this fixes: an already-indexed
+        // library being reorganized in place must not treat a misfiled
+        // file's own indexed row as "already imported" — that flag used to
+        // make commit::commit_item skip actually moving it.
+        let library = tempfile::tempdir().unwrap();
+        fs::create_dir_all(library.path().join("misc")).unwrap();
+        let misfiled = library.path().join("misc/IMG_20230815_141523.jpg");
+        fs::write(&misfiled, b"fixture bytes").unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "index".to_string(),
+                undo_log_path: String::new(),
+            },
+        )
+        .unwrap();
+        let meta = fs::metadata(&misfiled).unwrap();
+        db::insert_indexed_file(
+            &conn,
+            &db::IndexedFileWrite {
+                current_path: &misfiled.to_string_lossy(),
+                content_hash: &dedup::content_hash(&misfiled).unwrap(),
+                size: Some(meta.len() as i64),
+                mtime: dedup::mtime_secs(&meta),
+                file_id: None,
+            },
+            "2026-08-01T00:00:01",
+            batch_id,
+        )
+        .unwrap();
+
+        let options = ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: today(),
+            index: Some(&conn),
+        };
+        let plan = scan(&options);
+        let item = find(&plan, "IMG_20230815_141523.jpg");
+
+        assert!(!item.already_imported);
+        assert!(!item.no_op);
+        assert_eq!(
+            item.destination_path.as_ref().unwrap(),
+            &library.path().join("2023/2023-08-15/IMG_20230815_141523.jpg")
+        );
     }
 
     #[test]

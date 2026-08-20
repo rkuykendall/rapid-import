@@ -39,7 +39,11 @@ pub struct PlanItem {
     /// disk — reorganize-in-place found nothing to do for this item.
     pub no_op: bool,
     /// True when this file's content hash already exists in the SQLite
-    /// index, e.g. re-scanning the same SD card after a prior import.
+    /// index *at some other path* — e.g. re-scanning the same SD card
+    /// after a prior import, or (during reorganize-in-place) a genuine
+    /// second copy elsewhere in the library. Never true purely because
+    /// this file matches its own indexed row at its own current path —
+    /// see `scan::has_other_indexed_copy`.
     pub already_imported: bool,
     /// Caller-set exclusion — "don't import this file, for any reason" —
     /// independent of conflict status. `scan()` always produces `false`;
