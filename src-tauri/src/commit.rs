@@ -345,6 +345,21 @@ fn record_move(
     was_copy: bool,
     undo_moves: &mut Vec<UndoMove>,
 ) -> Result<()> {
+    // A real move leaves nothing behind at item.source_path — any row still
+    // indexed there is now stale, describing a file that no longer exists.
+    // Left in place, the next scan would see it as a second copy under this
+    // destination (it's a different path than the file's new location, and
+    // still nested under destination_root) and wrongly flag "Already
+    // imported"/"Duplicate found" on the very file that row used to
+    // describe. Undoing this batch loses this row's fast-path caching for
+    // that one file (undo_batch also removes the new row this call is about
+    // to insert), not a correctness issue — a later scan or reindex
+    // re-establishes it. Skipped entirely for a Copy: the source file is
+    // deliberately left in place there, so its indexed row is still valid.
+    if !was_copy && let Ok(Some(old_row)) = db::find_by_path(conn, &item.source_path.to_string_lossy()) {
+        db::delete_files(conn, &[old_row.id])?;
+    }
+
     let chosen = item.chosen();
     // Size/mtime of the file at its new resting place — without these, a
     // later reorganize-in-place scan could never recognize this exact file
@@ -1087,6 +1102,71 @@ mod tests {
         assert_eq!(summary.already_imported, 0);
         assert!(!misfiled.exists(), "no longer at the old, wrong location");
         assert!(expected_dest.exists(), "relocated to its correct date folder");
+    }
+
+    #[test]
+    fn a_rescan_after_a_real_move_does_not_flag_the_moved_file_as_a_duplicate_of_itself() {
+        // End-to-end regression test for the bug reported after the first
+        // real reorganize-in-place commit: a moved file's OLD indexed row
+        // used to linger forever, so the very next scan would find it,
+        // correctly (by its own logic) recognize it as a *different* path
+        // under the same destination_root, and wrongly flag the just-moved
+        // file "Already imported" / "Duplicate found" against a row
+        // describing a file that no longer exists anywhere.
+        let library = tempfile::tempdir().unwrap();
+        let undo_dir = tempfile::tempdir().unwrap();
+        let conn = db::open_in_memory().unwrap();
+
+        fs::create_dir_all(library.path().join("misc")).unwrap();
+        let misfiled = library.path().join("misc/IMG_20230815_141523.jpg");
+        fs::write(&misfiled, b"fixture bytes").unwrap();
+
+        let batch_id = db::insert_batch(
+            &conn,
+            &db::NewBatch {
+                started_at: "2026-08-01T00:00:00".to_string(),
+                profile_id: None,
+                kind: "index".to_string(),
+                undo_log_path: String::new(),
+            },
+        )
+        .unwrap();
+        let meta = fs::metadata(&misfiled).unwrap();
+        db::insert_indexed_file(
+            &conn,
+            &db::IndexedFileWrite {
+                current_path: &misfiled.to_string_lossy(),
+                content_hash: &dedup::content_hash(&misfiled).unwrap(),
+                size: Some(meta.len() as i64),
+                mtime: dedup::mtime_secs(&meta),
+                file_id: None,
+            },
+            "2026-08-01T00:00:01",
+            batch_id,
+        )
+        .unwrap();
+
+        let scan_options = crate::scan::ScanOptions {
+            source_root: library.path(),
+            destination_root: library.path(),
+            folder_template: "%Y/%Y-%m-%d",
+            now: chrono::Local::now().date_naive(),
+            index: Some(&conn),
+        };
+        let plan = crate::scan::scan(&scan_options);
+
+        let mut opts = options(&conn, undo_dir.path(), library.path());
+        opts.kind = "reorganize";
+        commit_plan(&plan, &opts).unwrap();
+
+        // The real bug: rescan afterward, the way the app's UI does after
+        // every commit.
+        let rescanned = crate::scan::scan(&scan_options);
+        let item = rescanned.items.iter().find(|i| i.source_path.ends_with("IMG_20230815_141523.jpg")).unwrap();
+
+        assert!(!item.already_imported, "the file's own old (now-deleted) row must not look like a second copy");
+        let duplicates = dedup::find_duplicates(&conn, &rescanned.items, library.path());
+        assert!(duplicates.is_empty(), "no duplicate group should mention a moved file's stale old-path row");
     }
 }
 
